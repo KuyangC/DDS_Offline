@@ -548,15 +548,21 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         _autoRefreshStatusSubscription = autoRefreshService.statusStream.listen((status) {
           if (_disposed || !mounted) return;
 
-          // Check disconnect status
+          // 🔥 FIX: Disconnect berdasarkan DATA, bukan AutoRefreshService
           final wasDisconnected = _isDisconnected;
-          final isNowDisconnected = autoRefreshService.isDisconnected;
+
+          // Check apakah ada data yang valid
+          final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+          final hasData = fireAlarmData.hasValidZoneData;
+
+          // Jika ada data zone, berarti CONNECTED
+          final isNowDisconnected = !hasData;
 
           if (wasDisconnected != isNowDisconnected) {
             setState(() {
               _isDisconnected = isNowDisconnected;
             });
-            AppLogger.info('🔌 Disconnect status changed: $_isDisconnected', tag: 'UI_SYNC');
+            print('🔌 Disconnect status changed: $_isDisconnected (hasValidZoneData=$hasData)');
           }
         });
 
@@ -1165,15 +1171,15 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                                                 ),
                                                 const SizedBox(height: 5),
                                                 Text(
-                                                  // 🔥 NEW: Show DISCONNECTED jika ESP32 terputus (OFFLINE MODE ONLY)
+                                                  // 🔥 FIX: Gunakan logika status yang benar
                                                   _isDisconnected
                                                       ? 'DISCONNECTED'
-                                                      : fireAlarmData.getSystemStatusWithTroubleDetection('Alarm'),
+                                                      : _getSystemStatusText(fireAlarmData),
                                                   style: TextStyle(
-                                                    // 🔥 NEW: Warna merah jika DISCONNECTED
+                                                    // 🔥 FIX: Gunakan warna yang sesuai status
                                                     color: _isDisconnected
                                                         ? Colors.red
-                                                        : fireAlarmData.getSystemStatusColorWithTroubleDetection('Alarm'),
+                                                        : _getSystemStatusColor(fireAlarmData),
                                                     fontSize: 18,
                                                     fontWeight: FontWeight.bold,
                                                   ),
@@ -1251,6 +1257,30 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         ),
       ),
     );
+  }
+
+  /// Helper: Get system status text based on zone states
+  String _getSystemStatusText(FireAlarmData fireAlarmData) {
+    // Cek berdasarkan active zones
+    if (fireAlarmData.activeAlarmZones.isNotEmpty) {
+      return 'ALARM';
+    }
+    if (fireAlarmData.activeTroubleZones.isNotEmpty) {
+      return 'TROUBLE';
+    }
+    return 'NORMAL';
+  }
+
+  /// Helper: Get system status color based on zone states
+  Color _getSystemStatusColor(FireAlarmData fireAlarmData) {
+    // Cek berdasarkan active zones
+    if (fireAlarmData.activeAlarmZones.isNotEmpty) {
+      return Colors.red;  // ALARM = Merah
+    }
+    if (fireAlarmData.activeTroubleZones.isNotEmpty) {
+      return Colors.orange;  // TROUBLE = Orange
+    }
+    return Colors.green;  // NORMAL = Hijau
   }
 
   Widget _buildDynamicGrid(BuildContext context, BoxConstraints constraints, FireAlarmData fireAlarmData) {
