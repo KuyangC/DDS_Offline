@@ -108,6 +108,10 @@ class WebSocketModeManager extends ChangeNotifier {
       // Store FireAlarmData reference with proper typing
       _fireAlarmData = fireAlarmData;
 
+      // 🔥 CRITICAL: Sync WebSocket mode to FireAlarmData NOW that we have the reference
+      _fireAlarmData!.setWebSocketMode(_isWebSocketMode);
+      AppLogger.info('🔄 Synced WebSocket mode to FireAlarmData: $_isWebSocketMode', tag: 'WS_MODE_MANAGER');
+
       // Create single WebSocket manager with proper FireAlarmData reference
       _webSocketManager = FireAlarmWebSocketManager(_fireAlarmData!);
 

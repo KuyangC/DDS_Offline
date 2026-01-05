@@ -240,6 +240,15 @@ class FireAlarmWebSocketManager extends ChangeNotifier {
 
       if (esp32Data != null) {
         _logMessageAccepted(esp32Data);
+
+        // 🔥 CRITICAL FIX: If data received, ensure connection status is TRUE
+        // This handles cases where WebSocketService reports disconnected but data is still flowing
+        if (!_fireAlarmData.isWebSocketConnected) {
+          print('🔄 Auto-set connection status to CONNECTED (data received)');
+          _fireAlarmData.setWebSocketConnectionStatus(true);
+          AppLogger.info('🔄 Auto-set connection status to CONNECTED (data received)', tag: 'FIRE_ALARM_WS');
+        }
+
         _updateFireAlarmData(esp32Data);
       } else {
         _logMessageFiltered(message);

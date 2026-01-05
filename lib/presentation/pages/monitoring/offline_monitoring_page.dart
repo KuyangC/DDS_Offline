@@ -1264,14 +1264,21 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
       runSpacing: spacing,
       children: List.generate(_displayModules, (index) {
         final moduleNumber = index + 1;
+
+        // 🔥 CRITICAL FIX: Bungkus dengan Consumer supaya rebuild saat FireAlarmData berubah
         return SizedBox(
           width: moduleWidth,
-          child: IndividualModuleContainer(
-            moduleNumber: moduleNumber,
-            fireAlarmData: fireAlarmData,
-            zoneNames: _zoneNames,
-            onZoneTap: (zoneNumber) => _showZoneDetailDialog(context, zoneNumber, fireAlarmData),
-            onModuleTap: (moduleNumber) => _showModuleDetailDialog(context, moduleNumber, fireAlarmData),
+          child: Consumer<FireAlarmData>(
+            builder: (context, fireAlarmData, child) {
+              return IndividualModuleContainer(
+                key: ValueKey('module_$moduleNumber'), // Tambah key untuk memastikan rebuild
+                moduleNumber: moduleNumber,
+                fireAlarmData: fireAlarmData,
+                zoneNames: _zoneNames,
+                onZoneTap: (zoneNumber) => _showZoneDetailDialog(context, zoneNumber, fireAlarmData),
+                onModuleTap: (moduleNumber) => _showModuleDetailDialog(context, moduleNumber, fireAlarmData),
+              );
+            },
           ),
         );
       }),
@@ -2470,14 +2477,21 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
     );
   }
 
-  // Get zone color based on complete system status (same as monitoring.dart)
+  // Get zone color based on complete system status
   Color _getZoneColorFromSystem(int zoneNumber) {
-    // ADD: NO DATA validation (missing validation fix)
-    if (!widget.fireAlarmData.hasValidZoneData || widget.fireAlarmData.isInitiallyLoading) {
-      return Colors.grey;  // Grey for disconnect/no data
+    // 🔥 FIX: Direct check dari activeAlarmZones dan activeTroubleZones
+    final alarmZones = widget.fireAlarmData.activeAlarmZones;
+    final troubleZones = widget.fireAlarmData.activeTroubleZones;
+
+    // Cek langsung dari list (paling cepat dan akurat)
+    if (alarmZones.contains(zoneNumber)) {
+      return Colors.red;  // ALARM = MERAH
+    }
+    if (troubleZones.contains(zoneNumber)) {
+      return Colors.orange;  // TROUBLE = ORANGE
     }
 
-    // Check accumulation mode first
+    // Check accumulation mode
     if (widget.fireAlarmData.isAccumulationMode) {
       if (widget.fireAlarmData.isZoneAccumulatedAlarm(zoneNumber)) {
         return Colors.red;
@@ -2491,25 +2505,12 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
     final zoneStatus = widget.fireAlarmData.getIndividualZoneStatus(zoneNumber);
     if (zoneStatus != null) {
       final status = zoneStatus['status'] as String?;
-      switch (status) {
-        case 'Alarm':
-          return Colors.red;
-        case 'Trouble':
-          return Colors.orange;
-        case 'Active':
-          return Colors.blue.shade200;
-        case 'Normal':
-          return Colors.white;
-        default:
-          return Colors.grey.shade300;
-      }
+      if (status == 'Alarm') return Colors.red;
+      if (status == 'Trouble') return Colors.orange;
     }
 
-    // System status fallback
-    if (widget.fireAlarmData.alarmLED) return Colors.red;
-    // Drill and Silenced checks removed for simplicity in offline mode
-
-    return Colors.white; // Default normal
+    // Default: NORMAL/ACTIVE = HIJAU
+    return Colors.green;
   }
 }
 
