@@ -275,18 +275,36 @@ class FireAlarmData extends ChangeNotifier {
 
   /// Get active alarm zone numbers
   List<int> get activeAlarmZones {
-    return _zoneStatus.values
+    final alarmZones = _zoneStatus.values
         .where((zone) => zone.hasAlarm)
         .map((zone) => zone.globalZoneNumber)
         .toList();
+
+    // 🔍 DEBUG: Log with PRINT
+    if (alarmZones.isNotEmpty) {
+      print('🚨 Active Alarm Zones: $alarmZones');
+    } else {
+      print('✅ No active alarm zones');
+    }
+
+    return alarmZones;
   }
 
   /// Get active trouble zone numbers
   List<int> get activeTroubleZones {
-    return _zoneStatus.values
+    final troubleZones = _zoneStatus.values
         .where((zone) => zone.hasTrouble)
         .map((zone) => zone.globalZoneNumber)
         .toList();
+
+    // 🔍 DEBUG: Log with PRINT
+    if (troubleZones.isNotEmpty) {
+      print('⚠️ Active Trouble Zones: $troubleZones');
+    } else {
+      print('✅ No active trouble zones');
+    }
+
+    return troubleZones;
   }
 
   /// Get system status for UI
@@ -515,13 +533,17 @@ class FireAlarmData extends ChangeNotifier {
   /// Process WebSocket data with optional force processing
   Future<void> processWebSocketData(String rawData, {bool forceProcess = false}) async {
     try {
+      // DEBUG: Log current state
+      AppLogger.info('🔍 DEBUG: _isWebSocketMode=$_isWebSocketMode, forceProcess=$forceProcess', tag: 'WEBSOCKET_DEBUG');
+
       // Store as pending if not in WebSocket mode
       if (!_shouldProcessWebSocketData(forceProcess)) {
         _storePendingData(rawData);
+        AppLogger.warning('⚠️ Data stored as PENDING because not in WebSocket mode', tag: 'WEBSOCKET_DEBUG');
         return;
       }
 
-      AppLogger.info('Processing WebSocket data: $rawData', tag: 'WEBSOCKET');
+      AppLogger.info('✅ Processing WebSocket data: $rawData', tag: 'WEBSOCKET');
 
       // Parse data
       final parseResult = await UnifiedFireAlarmAPI.parse(rawData);
@@ -561,6 +583,12 @@ class FireAlarmData extends ChangeNotifier {
 
   /// Update zone statuses from parse result
   Future<void> _updateZoneStatuses(dynamic parseResult) async {
+    int zoneCount = 0;
+
+    print('═══════════════════════════════════════');
+    print('🔄 UPDATE ZONE STATUSES START');
+    print('═══════════════════════════════════════');
+
     for (final unifiedZone in parseResult.zones.values) {
       final zoneNumber = unifiedZone.zoneNumber;
 
@@ -568,9 +596,21 @@ class FireAlarmData extends ChangeNotifier {
       final zoneStatus = _createZoneStatus(unifiedZone);
       _zoneStatus[zoneNumber] = zoneStatus;
 
+      // 🔍 DEBUG: Log each zone status with PRINT
+      if (zoneNumber <= 10) {
+        print('📍 Zone #$zoneNumber: ${zoneStatus.statusText}, hasAlarm=${zoneStatus.hasAlarm}, hasTrouble=${zoneStatus.hasTrouble}');
+      }
+
       // Update bell and accumulation tracking
       _updateZoneTracking(unifiedZone);
+
+      zoneCount++;
     }
+
+    print('✅ Updated $zoneCount zone statuses');
+    print('📊 Total zones in _zoneStatus: ${_zoneStatus.length}');
+    print('📊 hasValidZoneData: ${_zoneStatus.isNotEmpty}');
+    print('═══════════════════════════════════════');
   }
 
   /// Create ZoneStatus from UnifiedZoneStatus

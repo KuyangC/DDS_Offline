@@ -278,11 +278,16 @@ class _TabMonitoringPageState extends State<TabMonitoringPage> {
       itemCount: _displayModules,
       itemBuilder: (context, index) {
         final moduleNumber = index + 1;
-        return IndividualModuleContainer(
-          moduleNumber: moduleNumber,
-          fireAlarmData: fireAlarmData,
-          zoneNames: _zoneNames,
-          onZoneTap: (zoneNumber) => _showZoneDetailDialog(context, zoneNumber, fireAlarmData),
+        // 🔥 CRITICAL FIX: Wrap with Consumer to rebuild when FireAlarmData changes
+        return Consumer<FireAlarmData>(
+          builder: (context, fireAlarmData, child) {
+            return IndividualModuleContainer(
+              moduleNumber: moduleNumber,
+              fireAlarmData: fireAlarmData,
+              zoneNames: _zoneNames,
+              onZoneTap: (zoneNumber) => _showZoneDetailDialog(context, zoneNumber, fireAlarmData),
+            );
+          },
         );
       },
     );
@@ -774,44 +779,40 @@ class IndividualModuleContainer extends StatelessWidget {
     );
   }
 
-  // Get zone color based on complete system status (same as monitoring.dart)
+  // Get zone color based on complete system status
   Color _getZoneColorFromSystem(int zoneNumber) {
-    // ADD: NO DATA validation (missing validation fix)
-    if (!fireAlarmData.hasValidZoneData || fireAlarmData.isInitiallyLoading) {
-      return Colors.grey;  // Grey for disconnect/no data
+    // 🔥 FIX: Direct check dari activeAlarmZones dan activeTroubleZones
+    final alarmZones = fireAlarmData.activeAlarmZones;
+    final troubleZones = fireAlarmData.activeTroubleZones;
+
+    // Cek langsung dari list
+    if (alarmZones.contains(zoneNumber)) {
+      return Colors.red;  // ALARM = MERAH
+    }
+    if (troubleZones.contains(zoneNumber)) {
+      return Colors.orange;  // TROUBLE = ORANGE
     }
 
-    // Check accumulation mode first
+    // Check accumulation mode
     if (fireAlarmData.isAccumulationMode) {
-      if (fireAlarmData.isZoneAccumulatedAlarm(zoneNumber)) return Colors.red;
-      if (fireAlarmData.isZoneAccumulatedTrouble(zoneNumber)) return Colors.orange;
+      if (fireAlarmData.isZoneAccumulatedAlarm(zoneNumber)) {
+        return Colors.red;
+      }
+      if (fireAlarmData.isZoneAccumulatedTrouble(zoneNumber)) {
+        return Colors.orange;
+      }
     }
 
     // Check individual zone status
     final zoneStatus = fireAlarmData.getIndividualZoneStatus(zoneNumber);
     if (zoneStatus != null) {
       final status = zoneStatus['status'] as String?;
-      switch (status) {
-        case 'Alarm':
-          return Colors.red;
-        case 'Trouble':
-          return Colors.orange;
-        case 'Active':
-          return Colors.blue.shade200;
-        case 'Normal':
-          return Colors.white;
-        default:
-          return Colors.grey.shade300;
-      }
+      if (status == 'Alarm') return Colors.red;
+      if (status == 'Trouble') return Colors.orange;
     }
 
-    // System status fallback
-    // getSystemStatus returns String, convert to bool
-    if (fireAlarmData.getSystemStatus('Alarm') == 'active') return Colors.red;
-    if (fireAlarmData.getSystemStatus('Drill') == 'active') return Colors.red;
-    if (fireAlarmData.getSystemStatus('Silenced') == 'active') return Colors.yellow.shade700;
-
-    return Colors.white; // Default normal
+    // Default: NORMAL/ACTIVE = HIJAU
+    return Colors.green;
   }
 }
 
