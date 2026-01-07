@@ -2535,11 +2535,22 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
     final zoneStatus = widget.fireAlarmData.getIndividualZoneStatus(zoneNumber);
     if (zoneStatus != null) {
       final status = zoneStatus['status'] as String?;
+
+      // Cek OFFLINE status dulu sebelum cek alarm/trouble
+      if (zoneStatus['isOffline'] == true || status == 'Offline') {
+        return Colors.grey.shade300;  // OFFLINE = Abu-abu
+      }
+
       if (status == 'Alarm') return Colors.red;
       if (status == 'Trouble') return Colors.orange;
     }
 
-    // Default: NORMAL/ACTIVE = HIJAU
+    // Jika tidak ada data zone sama sekali → OFFLINE
+    if (zoneStatus == null) {
+      return Colors.grey.shade300;  // NO DATA = Abu-abu (Offline)
+    }
+
+    // Default: NORMAL/ACTIVE = HIJAU (hanya jika ada data dan tidak offline)
     return Colors.green;
   }
 }

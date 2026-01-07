@@ -184,14 +184,30 @@ class FireAlarmData extends ChangeNotifier {
       return {
         'zoneNumber': zoneNumber,
         'isActive': false,
+        'isOffline': true,
         'status': 'Offline',
         'color': Colors.grey,
+      };
+    }
+
+    // 🔥 FIX: Return 'Offline' status ketika zone tidak aktif
+    if (!zone.isActive) {
+      return {
+        'zoneNumber': zoneNumber,
+        'isActive': false,
+        'isOffline': true,
+        'status': 'Offline',
+        'color': Colors.grey.shade300,
+        'hasAlarm': false,
+        'hasTrouble': false,
+        'hasBellActive': false,
       };
     }
 
     return {
       'zoneNumber': zoneNumber,
       'isActive': zone.isActive,
+      'isOffline': false,
       'status': zone.statusText,
       'color': zone.currentStatus == ZoneStatusType.alarm
           ? Colors.red

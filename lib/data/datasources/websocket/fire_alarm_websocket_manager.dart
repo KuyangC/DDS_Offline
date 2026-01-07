@@ -20,7 +20,7 @@ class FireAlarmWebSocketManager extends ChangeNotifier {
   final FireAlarmData _fireAlarmData;
   final WebSocketService _webSocketService = WebSocketService();
 
-  // Stream subscriptions
+  // Stream subscriptionsww
   StreamSubscription<WebSocketMessage>? _messageSubscription;
   StreamSubscription<WebSocketStatus>? _statusSubscription;
 
