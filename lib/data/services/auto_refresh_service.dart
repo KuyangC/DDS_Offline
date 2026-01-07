@@ -374,11 +374,11 @@ class AutoRefreshService {
     print('         Timeout: ${_disconnectTimeout.inSeconds} seconds');
 
     _disconnectCheckTimer = Timer.periodic(Duration(seconds: 5), (timer) {
-      print('⏰⏰⏰ AUTO_REFRESH_SERVICE: TIMER TICK - calling _checkDisconnectStatus() ⏰⏰⏰');
+      // Silent timer tick - no need to spam logs every check
       _checkDisconnectStatus();
     });
 
-    print('✅ AUTO_REFRESH_SERVICE: Disconnect detection timer STARTED');
+    print('✅ AUTO_REFRESH_SERVICE: Disconnect detection timer STARTED (interval: ${_connectionCheckInterval.inSeconds}s)');
   }
 
   /// Check disconnect status untuk offline mode
@@ -387,7 +387,12 @@ class AutoRefreshService {
       // 🔥 DEBUG: Log setiap kali check dipanggil
       final now = DateTime.now();
       final timeFormatted = '${now.hour}:${now.minute}:${now.second}';
-      print('⏰⏰⏰ AUTO_REFRESH_SERVICE: _checkDisconnectStatus() called at $timeFormatted ⏰⏰⏰');
+      // 🔥 FIX: Jika belum pernah ada data dan belum ada data setelah restart, skip check
+      // Tapi jika sudah pernah connect sebelumnya (lastDataReceivedTime != null), lanjutkan check
+      if (_lastDataReceivedTime == null && !_hasReceivedDataAfterRestart) {
+        // Skip disconnect check - silent skip, no need to spam logs every 3 seconds
+        return;
+      }
 
       // 🔥 FIX: Cek apakah WebSocketService terdaftar (ada indikasi mode offline)
       // Daripada bergantung pada isWebSocketMode flag yang mungkin incorrect
@@ -395,21 +400,11 @@ class AutoRefreshService {
       final isWebSocketMode = _webSocketModeManager?.isWebSocketMode ?? false;
       final isWSConnected = _webSocketService?.isConnected ?? false;
 
-      print('   🔍 WebSocketMode flag: $isWebSocketMode');
-      print('   🔍 WebSocketService exists: $hasWebSocketService');
-      print('   🔍 WS isConnected: $isWSConnected');
-      print('   🔍 hasReceivedDataAfterRestart: $_hasReceivedDataAfterRestart');
-
-      // 🔥 FIX: Jika belum pernah ada data dan belum ada data setelah restart, skip check
-      // Tapi jika sudah pernah connect sebelumnya (lastDataReceivedTime != null), lanjutkan check
-      if (_lastDataReceivedTime == null && !_hasReceivedDataAfterRestart) {
-        print('   ℹ️ Belum pernah ada WebSocket data received - SKIP disconnect check');
-        return;
-      }
+      print('⏰ AUTO_REFRESH: _checkDisconnectStatus() WS=$isWSConnected Mode=$isWebSocketMode');
 
       // 🔥 FIX: Gunakan logic baru - check jika WebSocketService exists dan sudah pernah ada data
       if (!hasWebSocketService) {
-        print('   ❌ No WebSocketService - SKIP disconnect check (Firebase mode)');
+        print('   ❌ No WebSocketService - Firebase mode, skipping disconnect check');
         // Firebase mode - reset disconnect status
         if (_isDisconnected) {
           _isDisconnected = false;
@@ -419,7 +414,7 @@ class AutoRefreshService {
         return;
       }
 
-      print('   ✅ WebSocket mode detected - proceeding with disconnect check');
+      print('   ✅ WebSocket mode - proceeding with disconnect check');
 
       // 🔥 NEW: Check grace period setelah restart
       if (_lastRestartTime != null) {
@@ -833,7 +828,7 @@ class AutoRefreshService {
   /// Perform auto refresh
   void _performAutoRefresh() {
     try {
-      AppLogger.debug('Performing auto refresh', tag: _tag);
+      // Silent auto refresh - no need to log every refresh event
 
       // Emit refresh event
       _refreshController.add(DateTime.now());

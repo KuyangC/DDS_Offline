@@ -1278,7 +1278,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
       return Colors.red;  // ALARM = Merah
     }
     if (fireAlarmData.activeTroubleZones.isNotEmpty) {
-      return Colors.orange;  // TROUBLE = Orange
+      return Colors.yellow.shade700;  // TROUBLE = KUNING
     }
     return Colors.green;  // NORMAL = Hijau
   }
@@ -1487,18 +1487,18 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
               },
               child: BlinkingTabHeader(
                 shouldBlink: _shouldShowTroubleIcon(fireAlarmData),
-                blinkColor: Colors.orange,
+                blinkColor: Colors.yellow.shade700,  // TROUBLE = KUNING
                 enableGlow: true,
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   decoration: BoxDecoration(
                     color: _selectedTab == 'trouble'
-                        ? Colors.orange.shade600
+                        ? Colors.yellow.shade700  // TROUBLE = KUNING
                         : Colors.transparent,
                     border: Border(
                       bottom: BorderSide(
                         color: _selectedTab == 'trouble'
-                            ? Colors.orange.shade600
+                            ? Colors.yellow.shade700  // TROUBLE = KUNING
                             : Colors.transparent,
                         width: 2,
                       ),
@@ -1967,17 +1967,17 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: hasActiveTrouble ? Colors.orange.shade50 : Colors.grey.shade50,
+            color: hasActiveTrouble ? Colors.yellow.shade50 : Colors.grey.shade50,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: hasActiveTrouble ? Colors.orange.shade200 : Colors.grey.shade200,
+              color: hasActiveTrouble ? Colors.yellow.shade300 : Colors.grey.shade200,
             ),
           ),
           child: Row(
             children: [
               Icon(
                 Icons.warning,
-                color: hasActiveTrouble ? Colors.orange.shade600 : Colors.grey.shade600,
+                color: hasActiveTrouble ? Colors.yellow.shade700 : Colors.grey.shade600,
                 size: 20,
               ),
               const SizedBox(width: 12),
@@ -1992,14 +1992,14 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: hasActiveTrouble ? Colors.orange.shade600 : Colors.grey.shade600,
+                        color: hasActiveTrouble ? Colors.yellow.shade800 : Colors.grey.shade600,
                       ),
                     ),
                     Text(
                       hasActiveTrouble ? 'System requires attention' : 'All systems operational',
                       style: TextStyle(
                         fontSize: 12,
-                        color: hasActiveTrouble ? Colors.orange.shade700 : Colors.grey.shade500,
+                        color: hasActiveTrouble ? Colors.yellow.shade900 : Colors.grey.shade500,
                       ),
                     ),
                   ],
@@ -2023,21 +2023,21 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                     return InkWell(
                       onTap: () => _showZoneDetailDialog(context, zone['zoneNumber'], fireAlarmData),
                       borderRadius: BorderRadius.circular(6),
-                      splashColor: Colors.orange.withValues(alpha: 0.1),
-                      highlightColor: Colors.orange.withValues(alpha: 0.05),
+                      splashColor: Colors.yellow.withValues(alpha: 0.1),
+                      highlightColor: Colors.yellow.withValues(alpha: 0.05),
                       child: Container(
                         margin: const EdgeInsets.only(bottom: 8),
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
+                          color: Colors.yellow.shade50,
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(
-                            color: Colors.orange.shade200,
+                            color: Colors.yellow.shade300,
                             width: 1,
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.orange.withValues(alpha: 0.08),
+                              color: Colors.yellow.withValues(alpha: 0.08),
                               blurRadius: 3,
                               offset: const Offset(0, 1),
                             ),
@@ -2051,7 +2051,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                                   decoration: BoxDecoration(
-                                    color: Colors.orange.shade600,
+                                    color: Colors.yellow.shade700,
                                     borderRadius: BorderRadius.circular(3),
                                   ),
                                   child: Text(
@@ -2066,7 +2066,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                                 const SizedBox(width: 6),
                                 Icon(
                                   Icons.warning,
-                                  color: Colors.orange.shade600,
+                                  color: Colors.yellow.shade700,
                                   size: 14,
                                 ),
                               ],
@@ -2085,7 +2085,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                               zone['status'] ?? '',
                               style: TextStyle(
                                 fontSize: 11,
-                                color: Colors.orange.shade700,
+                                color: Colors.yellow.shade900,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -2518,7 +2518,7 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
       return Colors.red;  // ALARM = MERAH
     }
     if (troubleZones.contains(zoneNumber)) {
-      return Colors.orange;  // TROUBLE = ORANGE
+      return Colors.yellow.shade700;  // TROUBLE = KUNING
     }
 
     // Check accumulation mode
@@ -2527,7 +2527,7 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
         return Colors.red;
       }
       if (widget.fireAlarmData.isZoneAccumulatedTrouble(zoneNumber)) {
-        return Colors.orange;
+        return Colors.yellow.shade700;
       }
     }
 
@@ -2542,7 +2542,7 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
       }
 
       if (status == 'Alarm') return Colors.red;
-      if (status == 'Trouble') return Colors.orange;
+      if (status == 'Trouble') return Colors.yellow.shade700;
     }
 
     // Jika tidak ada data zone sama sekali → OFFLINE
@@ -2609,11 +2609,11 @@ class ModuleDetailDialog extends StatelessWidget {
       moduleStatusColor = Colors.red;
       moduleStatusText = 'ALARM';
     } else if (troubleZones > 0) {
-      moduleStatusColor = Colors.orange;
+      moduleStatusColor = Colors.yellow.shade700;  // TROUBLE = KUNING
       moduleStatusText = 'TROUBLE';
     } else if (activeZones > 0) {
-      moduleStatusColor = Colors.blue;
-      moduleStatusText = 'ACTIVE';
+      moduleStatusColor = Colors.green;  // ACTIVE = HIJAU
+      moduleStatusText = 'NORMAL';
     } else {
       moduleStatusColor = Colors.green;
       moduleStatusText = 'NORMAL';
@@ -2733,6 +2733,7 @@ class ModuleDetailDialog extends StatelessWidget {
                             }
 
                             final statusColor = _getStatusColor(status);
+                            final zoneName = zoneNames[zoneNum] ?? ZoneNameLocalStorage.getDefaultZoneName(zoneNum);
 
                             return GestureDetector(
                               onTap: () {
@@ -2758,42 +2759,77 @@ class ModuleDetailDialog extends StatelessWidget {
                                 margin: const EdgeInsets.only(bottom: 8),
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: Colors.white,
+                                  color: statusColor.withValues(alpha: 0.12),  // Background ikut warna status
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                                  border: Border.all(
+                                    color: statusColor,
+                                    width: 2,  // Border lebih tebal dan ikut warna status
+                                  ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.grey.withValues(alpha: 0.1),
-                                      blurRadius: 2,
-                                      offset: const Offset(0, 1),
+                                      color: statusColor.withValues(alpha: 0.15),  // Shadow ikut warna status
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
                                     ),
                                   ],
                                 ),
-                                child: Row(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Container(
-                                      width: 12,
-                                      height: 12,
-                                      decoration: BoxDecoration(
-                                        color: statusColor,
-                                        shape: BoxShape.circle,
-                                      ),
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 12,
+                                          height: 12,
+                                          decoration: BoxDecoration(
+                                            color: statusColor,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            zoneName,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 14,
+                                              color: statusColor,  // Text ikut warna status
+                                            ),
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: statusColor,
+                                            borderRadius: BorderRadius.circular(6),
+                                            border: Border.all(color: statusColor, width: 1),
+                                          ),
+                                          child: Text(
+                                            status.toUpperCase(),
+                                            style: TextStyle(
+                                              color: Colors.white,  // Teks putih di atas warna status
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        zoneNames[zoneNum] ?? ZoneNameLocalStorage.getDefaultZoneName(zoneNum),
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
+                                    // Show additional info if zone has data
+                                    if (zoneStatus != null && status != 'Offline') ...[
+                                      const SizedBox(height: 8),
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 24),
+                                        child: Text(
+                                          'Zone #$zoneNum',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: statusColor.withValues(alpha: 0.7),  // Ikut warna status
+                                            fontWeight: FontWeight.w500,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    // Add arrow icon to indicate it's clickable
-                                    Icon(
-                                      Icons.chevron_right,
-                                      color: Colors.grey.shade400,
-                                      size: 20,
-                                    ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -2860,19 +2896,20 @@ class ModuleDetailDialog extends StatelessWidget {
   }
 
   Color _getStatusColor(String status) {
-    switch (status) {
-      case 'Alarm':
+    // 🔥 FIX: Case insensitive - convert to uppercase
+    final statusUpper = status.toUpperCase();
+    switch (statusUpper) {
+      case 'ALARM':
         return Colors.red;
-      case 'Trouble':
-        return Colors.orange;
-      case 'Active':
-        return Colors.blue;
-      case 'Normal':
-        return Colors.green;
-      case 'Offline':
-        return Colors.grey;
+      case 'TROUBLE':
+        return Colors.yellow.shade700;  // TROUBLE = KUNING
+      case 'NORMAL':
+        return Colors.green;  // NORMAL = HIJAU
+      case 'OFFLINE':
+      case 'INACTIVE':
+        return Colors.grey.shade300;  // OFFLINE = ABU-ABU
       default:
-        return Colors.grey;
+        return Colors.grey.shade300;
     }
   }
 }

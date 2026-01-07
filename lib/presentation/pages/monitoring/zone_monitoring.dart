@@ -591,7 +591,7 @@ class _ZoneMonitoringPageState extends State<ZoneMonitoringPage> with AutomaticK
   // Desktop layout (> 900px)
   Widget _buildDesktopLayout(double screenWidth, double screenHeight) {
     // Use tablet-responsive spacing (works for desktop too)
-    final double spacing = TabletResponsiveHelper.calculateOptimalSpacing(context);
+    fiokenal double spacing = TabletResponsiveHelper.calculateOptimalSpacing(context);
 
     // Debug device info for desktop
     TabletResponsiveHelper.debugDeviceInfo(context);

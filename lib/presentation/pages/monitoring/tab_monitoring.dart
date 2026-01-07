@@ -790,7 +790,7 @@ class IndividualModuleContainer extends StatelessWidget {
       return Colors.red;  // ALARM = MERAH
     }
     if (troubleZones.contains(zoneNumber)) {
-      return Colors.orange;  // TROUBLE = ORANGE
+      return Colors.yellow.shade700;  // TROUBLE = KUNING
     }
 
     // Check accumulation mode
@@ -799,7 +799,7 @@ class IndividualModuleContainer extends StatelessWidget {
         return Colors.red;
       }
       if (fireAlarmData.isZoneAccumulatedTrouble(zoneNumber)) {
-        return Colors.orange;
+        return Colors.yellow.shade700;
       }
     }
 
@@ -814,7 +814,7 @@ class IndividualModuleContainer extends StatelessWidget {
       }
 
       if (status == 'Alarm') return Colors.red;
-      if (status == 'Trouble') return Colors.orange;
+      if (status == 'Trouble') return Colors.yellow.shade700;
     }
 
     // Jika tidak ada data zone sama sekali → OFFLINE
