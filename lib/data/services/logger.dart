@@ -140,13 +140,14 @@ class AppLogger {
 
     final formattedMessage = '$timestampString $levelString $tagString${entry.message}';
 
+    // Print to console using print() instead of debugPrint to avoid pipe issues
     if (entry.error != null) {
-      
+      print('$formattedMessage\nError: ${entry.error}');
       if (entry.stackTrace != null) {
-        
+        print('StackTrace: ${entry.stackTrace}');
       }
     } else {
-      
+      print(formattedMessage);
     }
   }
 

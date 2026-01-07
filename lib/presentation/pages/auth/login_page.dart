@@ -233,10 +233,10 @@ class _LoginPageState extends State<Login_page> {
                   controller: _pinController,
                   obscureText: _obscureText,
                   keyboardType: TextInputType.number,
-                  maxLength: 6,
+                  maxLength: 4,
                   decoration: InputDecoration(
                     labelText: 'Masukkan PIN',
-                    hintText: 'XXXXXX',
+                    hintText: 'XXXX',
                     prefixIcon: const Icon(Icons.lock_outline),
                     suffixIcon: IconButton(
                       icon: Icon(_obscureText ? Icons.visibility_off : Icons.visibility),
