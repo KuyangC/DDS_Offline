@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../monitoring/offline_monitoring_page.dart';
 import '../../../data/services/logger.dart';
+import '../../../data/datasources/local/zone_name_local_storage.dart';
 
 /// Connection Configuration Page
 ///
@@ -159,6 +160,20 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
     );
   }
 
+  /// Navigates to zone name configuration page
+  void _navigateToZoneNameConfig() async {
+    // Get module count from form or saved config
+    final moduleCount = int.tryParse(_moduleCountController.text.trim()) ?? _defaultModuleCount;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ZoneNameConfigPage(
+          totalModules: moduleCount,
+        ),
+      ),
+    );
+  }
+
   /// Shows success snackbar message
   void _showSuccessSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -222,6 +237,8 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
                   _buildProjectNameField(),
                   const SizedBox(height: 16),
                   _buildModuleCountField(),
+                  const SizedBox(height: 16),
+                  _buildZoneNameConfigButton(),
                   const SizedBox(height: 24),
                   _buildInfoCard(),
                   const SizedBox(height: 24),
@@ -369,6 +386,23 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
         helperText: 'Each module has $_zonesPerModule zones',
       ),
       validator: _validateModuleCount,
+    );
+  }
+
+  /// Builds zone name configuration button
+  Widget _buildZoneNameConfigButton() {
+    return ElevatedButton.icon(
+      onPressed: _navigateToZoneNameConfig,
+      icon: const Icon(Icons.edit),
+      label: const Text('Configure Zone Names'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.orange.shade700,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
     );
   }
 

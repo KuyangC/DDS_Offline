@@ -62,32 +62,44 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
     IconData statusIcon;
     String timestampStr;
 
-    // ADD: NO DATA validation for individual zone status (HIGHEST PRIORITY)
-    if (!widget.fireAlarmData.hasValidZoneData || widget.fireAlarmData.isInitiallyLoading) {
-      statusText = 'Offline';
-      statusColor = Colors.grey;
-      statusIcon = Icons.signal_cellular_off;
-      timestampStr = 'N/A';
-    } else if (zoneStatus != null) {
+    // 🔥 FIX: CEK ZONE STATUS DULU, baru cek hasValidZoneData
+    // Kalau zoneStatus null → baru cek hasValidZoneData
+    if (zoneStatus == null) {
+      // Tidak ada data untuk zone ini → OFFLINE
+      if (!widget.fireAlarmData.hasValidZoneData || widget.fireAlarmData.isInitiallyLoading) {
+        // Belum ada data sama sekali di sistem
+        statusText = 'OFFLINE';
+        statusColor = Colors.grey.shade300;
+        statusIcon = Icons.signal_cellular_off;
+        timestampStr = 'N/A';
+      } else {
+        // Ada data di sistem tapi zone ini tidak ada → OFFLINE juga
+        statusText = 'OFFLINE';
+        statusColor = Colors.grey.shade300;
+        statusIcon = Icons.signal_cellular_off;
+        timestampStr = 'N/A';
+      }
+    } else {
       // Priority 2: Use actual zone status if data is valid
-      final status = zoneStatus['status'] as String?;
+      final status = (zoneStatus['status'] as String?)?.toUpperCase();
       switch (status) {
-        case 'Alarm':
+        case 'ALARM':
           statusText = 'ALARM';
           statusColor = Colors.red;
           statusIcon = Icons.warning;
           break;
-        case 'Trouble':
+        case 'TROUBLE':
           statusText = 'TROUBLE';
-          statusColor = Colors.orange;
+          statusColor = Colors.yellow.shade700;  // TROUBLE = KUNING
           statusIcon = Icons.error;
           break;
-        case 'Active':
-          statusText = 'ACTIVE';
-          statusColor = Colors.blue;
-          statusIcon = Icons.info;
+        case 'OFFLINE':
+        case 'INACTIVE':
+          statusText = 'OFFLINE';
+          statusColor = Colors.grey.shade300;  // OFFLINE = ABU-ABU
+          statusIcon = Icons.signal_cellular_off;
           break;
-        case 'Normal':
+        case 'NORMAL':
         default:
           // Only show NORMAL if we have valid data
           statusText = 'NORMAL';
@@ -109,12 +121,6 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
       } else {
         timestampStr = 'N/A';
       }
-    } else {
-      // Priority 3: Default to NORMAL when no zone status but system has valid data
-      statusText = 'NORMAL';
-      statusColor = Colors.green;
-      statusIcon = Icons.check_circle;
-      timestampStr = 'N/A';
     }
 
     // Get custom zone name
