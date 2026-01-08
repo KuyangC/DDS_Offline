@@ -170,13 +170,22 @@ class _LoginPageState extends State<Login_page> {
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade700,
+                    color: Colors.transparent,  // Hilang background biru
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
-                    Icons.sensors,
-                    size: 80,
-                    color: Colors.white,
+                  child: Image.asset(
+                    'assets/data/images/LOGO TEXT.png',
+                    width: 200,
+                    height: 200,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      // Fallback ke icon jika gambar tidak ditemukan
+                      return const Icon(
+                        Icons.sensors,
+                        size: 80,
+                        color: Colors.blue,
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -324,13 +333,22 @@ class _LoginPageState extends State<Login_page> {
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.blue.shade700,
+                    color: Colors.transparent,  // Hilang background biru
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
-                    Icons.lock_person,
-                    size: 80,
-                    color: Colors.white,
+                  child: Image.asset(
+                    'assets/data/images/LOGO TEXT.png',
+                    width: 200,
+                    height: 200,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      // Fallback ke icon jika gambar tidak ditemukan
+                      return const Icon(
+                        Icons.lock_person,
+                        size: 80,
+                        color: Colors.blue,
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 24),

@@ -264,15 +264,24 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
   /// Builds logo widget
   Widget _buildLogo() {
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.blue.shade700,
+        color: Colors.transparent,  // Hilang background biru
         shape: BoxShape.circle,
       ),
-      child: const Icon(
-        Icons.settings_input_antenna,
-        size: 80,
-        color: Colors.white,
+      child: Image.asset(
+        'assets/data/images/LOGO TEXT.png',
+        width: 200,
+        height: 200,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          // Fallback ke icon jika gambar tidak ditemukan
+          return const Icon(
+            Icons.settings_input_antenna,
+            size: 80,
+            color: Colors.blue,
+          );
+        },
       ),
     );
   }
