@@ -2267,16 +2267,18 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
   
   /// Show zone detail dialog
-  void _showZoneDetailDialog(BuildContext context, int zoneNumber, FireAlarmData fireAlarmData) {
-    // Prevent showing dialog during loading to avoid race conditions
-    if (_isZoneNamesLoading) {
-      AppLogger.debug('Zone names still loading, preventing dialog display', tag: 'OFFLINE_MONITORING');
-      return;
+  void _showZoneDetailDialog(BuildContext context, int zoneNumber, FireAlarmData fireAlarmData) async {
+    // 🔥 FIX: Reload zone names sebelum menampilkan dialog
+    final updatedZoneNames = await ZoneNameLocalStorage.loadZoneNamesForProject(widget.projectName);
+
+    // Update _zoneNames yang utama juga
+    if (mounted) {
+      setState(() {
+        _zoneNames = updatedZoneNames;
+      });
     }
 
-    // Debug: Log zone names content
-    AppLogger.debug('Zone names available: ${_zoneNames.length}', tag: 'OFFLINE_MONITORING');
-    AppLogger.debug('Looking for zone $zoneNumber: ${_zoneNames[zoneNumber] ?? "DEFAULT"}', tag: 'OFFLINE_MONITORING');
+    if (!context.mounted) return;
 
     showDialog(
       context: context,
@@ -2286,14 +2288,19 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         return ZoneDetailDialog(
           zoneNumber: zoneNumber,
           fireAlarmData: fireAlarmData,
-          zoneNames: _zoneNames,
+          zoneNames: updatedZoneNames,
         );
       },
     );
   }
 
   /// Show module detail dialog
-  void _showModuleDetailDialog(BuildContext context, int moduleNumber, FireAlarmData fireAlarmData) {
+  void _showModuleDetailDialog(BuildContext context, int moduleNumber, FireAlarmData fireAlarmData) async {
+    // 🔥 FIX: Reload zone names sebelum menampilkan dialog
+    final updatedZoneNames = await ZoneNameLocalStorage.loadZoneNamesForProject(widget.projectName);
+
+    if (!context.mounted) return;
+
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -2302,7 +2309,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         return ModuleDetailDialog(
           moduleNumber: moduleNumber,
           fireAlarmData: fireAlarmData,
-          zoneNames: _zoneNames,
+          zoneNames: updatedZoneNames,
         );
       },
     );

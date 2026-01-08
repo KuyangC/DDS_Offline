@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../monitoring/offline_monitoring_page.dart';
+import '../connection/zone_name_config_page.dart';
 import '../../../data/services/logger.dart';
 import '../../../data/datasources/local/zone_name_local_storage.dart';
 
@@ -162,13 +163,17 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
 
   /// Navigates to zone name configuration page
   void _navigateToZoneNameConfig() async {
-    // Get module count from form or saved config
+    // Get module count and project name from form
     final moduleCount = int.tryParse(_moduleCountController.text.trim()) ?? _defaultModuleCount;
+    final projectName = _projectNameController.text.trim().isEmpty
+        ? _defaultProjectName
+        : _projectNameController.text.trim();
 
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => ZoneNameConfigPage(
           totalModules: moduleCount,
+          projectName: projectName, // 🔥 FIX: Pass project name
         ),
       ),
     );
