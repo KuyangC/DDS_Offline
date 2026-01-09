@@ -432,6 +432,48 @@ class FireAlarmData extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Activity logging configuration
+  static const int _maxActivityLogs = 200; // Maximum logs to store
+  final Set<int> _loggedAlarmZones = {}; // Track logged alarm zones to prevent duplicates
+  final Set<int> _loggedTroubleZones = {}; // Track logged trouble zones to prevent duplicates
+  bool _wasConnected = false; // Track previous connection state for logging
+
+  /// Add activity log entry
+  /// This method adds a new activity log entry with timestamp and maintains max log limit
+  void addActivityLog(String activity, {String? zoneName, String? type}) {
+    final now = DateTime.now();
+    final dateStr = DateFormat('yyyy-MM-dd').format(now);
+    final timeStr = DateFormat('HH:mm:ss').format(now);
+
+    final logEntry = {
+      'timestamp': now,
+      'date': dateStr,
+      'time': timeStr,
+      'activity': activity,
+      if (zoneName != null) 'zoneName': zoneName,
+      if (type != null) 'type': type,
+    };
+
+    // Add to beginning of list (newest first)
+    activityLogs.insert(0, logEntry);
+
+    // Maintain max log limit
+    if (activityLogs.length > _maxActivityLogs) {
+      activityLogs.removeLast();
+    }
+
+    AppLogger.debug('Activity log added: $activity', tag: 'ACTIVITY_LOG');
+    notifyListeners();
+  }
+
+  /// Clear activity logs
+  void clearActivityLogs() {
+    activityLogs.clear();
+    _loggedAlarmZones.clear();
+    _loggedTroubleZones.clear();
+    notifyListeners();
+  }
+
   /// Get modules list (placeholder for compatibility)
   List<Map<String, dynamic>> get modules {
     // Return empty list for offline mode
@@ -444,6 +486,8 @@ class FireAlarmData extends ChangeNotifier {
     _bellConfirmationStatus.clear();
     _accumulatedAlarmZones.clear();
     _accumulatedTroubleZones.clear();
+    _loggedAlarmZones.clear();
+    _loggedTroubleZones.clear();
     _alarmLED = false;
     _troubleLED = false;
     _supervisoryLED = false;
@@ -467,6 +511,23 @@ class FireAlarmData extends ChangeNotifier {
   /// Set WebSocket connection status
   void setWebSocketConnectionStatus(bool isConnected) {
     print('🟢 FireAlarmData: setWebSocketConnectionStatus($isConnected)');
+
+    // Log connection state changes (only on actual state change)
+    if (_wasConnected != isConnected) {
+      if (isConnected) {
+        addActivityLog(
+          'System: Connection established to ESP32',
+          type: 'connection',
+        );
+      } else {
+        addActivityLog(
+          'System: Connection lost to ESP32',
+          type: 'connection',
+        );
+      }
+      _wasConnected = isConnected;
+    }
+
     _isWebSocketConnected = isConnected;
     notifyListeners();
     print('   isWebSocketConnected: $_isWebSocketConnected');
@@ -653,12 +714,64 @@ class FireAlarmData extends ChangeNotifier {
     // Update bell status
     _bellConfirmationStatus[deviceAddrInt] = unifiedZone.hasBellActive;
 
-    // Track accumulated zones
+    // Track accumulated zones and log new alarms/troubles
     if (unifiedZone.status == 'Alarm') {
+      // Only log if this is a new alarm (not previously logged)
+      if (!_loggedAlarmZones.contains(zoneNumber)) {
+        _loggedAlarmZones.add(zoneNumber);
+        // Remove from trouble logs if it was there
+        _loggedTroubleZones.remove(zoneNumber);
+
+        final zoneName = unifiedZone.description.isNotEmpty
+            ? unifiedZone.description
+            : 'Zone $zoneNumber';
+
+        addActivityLog(
+          '$zoneName - Fire Alarm detected',
+          zoneName: zoneName,
+          type: 'alarm',
+        );
+      }
       _accumulatedAlarmZones.add(zoneNumber);
-    }
-    if (unifiedZone.status == 'Trouble') {
+    } else if (unifiedZone.status == 'Trouble') {
+      // Only log if this is a new trouble (not previously logged and not an alarm)
+      if (!_loggedTroubleZones.contains(zoneNumber) && !_loggedAlarmZones.contains(zoneNumber)) {
+        _loggedTroubleZones.add(zoneNumber);
+
+        final zoneName = unifiedZone.description.isNotEmpty
+            ? unifiedZone.description
+            : 'Zone $zoneNumber';
+
+        addActivityLog(
+          '$zoneName - Trouble condition detected',
+          zoneName: zoneName,
+          type: 'trouble',
+        );
+      }
       _accumulatedTroubleZones.add(zoneNumber);
+    } else if (unifiedZone.status == 'Normal') {
+      // Clear from logged sets when returning to normal
+      final wasAlarm = _loggedAlarmZones.contains(zoneNumber);
+      final wasTrouble = _loggedTroubleZones.contains(zoneNumber);
+
+      if (wasAlarm || wasTrouble) {
+        _loggedAlarmZones.remove(zoneNumber);
+        _loggedTroubleZones.remove(zoneNumber);
+
+        final zoneName = unifiedZone.description.isNotEmpty
+            ? unifiedZone.description
+            : 'Zone $zoneNumber';
+
+        addActivityLog(
+          '$zoneName - Returned to Normal',
+          zoneName: zoneName,
+          type: 'normal',
+        );
+      }
+
+      // Remove from accumulated sets
+      _accumulatedAlarmZones.remove(zoneNumber);
+      _accumulatedTroubleZones.remove(zoneNumber);
     }
   }
 

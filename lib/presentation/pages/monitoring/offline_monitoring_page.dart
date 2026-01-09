@@ -1596,6 +1596,17 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
     final dateLogs = fireAlarmData.getActivityLogsByDate(_selectedDate);
 
+    // Format date for display (convert yyyy-MM-dd to dd/MM/yyyy)
+    String displayDate = _selectedDate;
+    try {
+      final parts = _selectedDate.split('-');
+      if (parts.length == 3) {
+        displayDate = '${parts[2]}/${parts[1]}/${parts[0]}'; // dd/MM/yyyy
+      }
+    } catch (e) {
+      // Keep original if parsing fails
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1613,7 +1624,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
           ),
           const SizedBox(width: 8),
           Text(
-            '$_selectedDate: ${dateLogs.length} event${dateLogs.length != 1 ? 's' : ''}',
+            '$displayDate: ${dateLogs.length} event${dateLogs.length != 1 ? 's' : ''}',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -1653,6 +1664,17 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
           final date = availableDates[index];
           final isSelected = date == _selectedDate;
 
+          // Format date for display (convert yyyy-MM-dd to dd/MM/yyyy)
+          String displayDate = date;
+          try {
+            final parts = date.split('-');
+            if (parts.length == 3) {
+              displayDate = '${parts[2]}/${parts[1]}/${parts[0]}'; // dd/MM/yyyy
+            }
+          } catch (e) {
+            // Keep original if parsing fails
+          }
+
           // Calculate responsive width
           final screenWidth = MediaQuery.of(context).size.width;
           double itemWidth = screenWidth <= 412 ? 100.0 : 110.0;
@@ -1681,7 +1703,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
               ),
               child: Center(
                 child: Text(
-                  date,
+                  displayDate,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
@@ -2267,16 +2289,18 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
   
   /// Show zone detail dialog
-  void _showZoneDetailDialog(BuildContext context, int zoneNumber, FireAlarmData fireAlarmData) {
-    // Prevent showing dialog during loading to avoid race conditions
-    if (_isZoneNamesLoading) {
-      AppLogger.debug('Zone names still loading, preventing dialog display', tag: 'OFFLINE_MONITORING');
-      return;
+  void _showZoneDetailDialog(BuildContext context, int zoneNumber, FireAlarmData fireAlarmData) async {
+    // 🔥 FIX: Reload zone names sebelum menampilkan dialog
+    final updatedZoneNames = await ZoneNameLocalStorage.loadZoneNamesForProject(widget.projectName);
+
+    // Update _zoneNames yang utama juga
+    if (mounted) {
+      setState(() {
+        _zoneNames = updatedZoneNames;
+      });
     }
 
-    // Debug: Log zone names content
-    AppLogger.debug('Zone names available: ${_zoneNames.length}', tag: 'OFFLINE_MONITORING');
-    AppLogger.debug('Looking for zone $zoneNumber: ${_zoneNames[zoneNumber] ?? "DEFAULT"}', tag: 'OFFLINE_MONITORING');
+    if (!context.mounted) return;
 
     showDialog(
       context: context,
@@ -2286,14 +2310,19 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         return ZoneDetailDialog(
           zoneNumber: zoneNumber,
           fireAlarmData: fireAlarmData,
-          zoneNames: _zoneNames,
+          zoneNames: updatedZoneNames,
         );
       },
     );
   }
 
   /// Show module detail dialog
-  void _showModuleDetailDialog(BuildContext context, int moduleNumber, FireAlarmData fireAlarmData) {
+  void _showModuleDetailDialog(BuildContext context, int moduleNumber, FireAlarmData fireAlarmData) async {
+    // 🔥 FIX: Reload zone names sebelum menampilkan dialog
+    final updatedZoneNames = await ZoneNameLocalStorage.loadZoneNamesForProject(widget.projectName);
+
+    if (!context.mounted) return;
+
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -2302,7 +2331,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         return ModuleDetailDialog(
           moduleNumber: moduleNumber,
           fireAlarmData: fireAlarmData,
-          zoneNames: _zoneNames,
+          zoneNames: updatedZoneNames,
         );
       },
     );

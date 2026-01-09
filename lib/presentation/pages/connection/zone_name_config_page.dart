@@ -8,10 +8,12 @@ import '../../../data/services/logger.dart';
 /// Allows user to configure custom names for each zone
 class ZoneNameConfigPage extends StatefulWidget {
   final int totalModules;
+  final String projectName; // 🔥 FIX: Receive project name from config
 
   const ZoneNameConfigPage({
     super.key,
     required this.totalModules,
+    required this.projectName,
   });
 
   @override
@@ -56,7 +58,8 @@ class _ZoneNameConfigPageState extends State<ZoneNameConfigPage> {
     setState(() => _isLoading = true);
 
     try {
-      final zoneNames = await ZoneNameLocalStorage.loadZoneNames();
+      // 🔥 FIX: Load from project-specific storage with actual project name
+      final zoneNames = await ZoneNameLocalStorage.loadZoneNamesForProject(widget.projectName);
 
       setState(() {
         for (var entry in zoneNames.entries) {
@@ -93,7 +96,8 @@ class _ZoneNameConfigPageState extends State<ZoneNameConfigPage> {
         }
       }
 
-      await ZoneNameLocalStorage.saveZoneNames(zoneNames);
+      // 🔥 FIX: Save to project-specific storage with actual project name
+      await ZoneNameLocalStorage.saveZoneNamesForProject(widget.projectName, zoneNames);
 
       if (!mounted) return;
 
@@ -123,8 +127,8 @@ class _ZoneNameConfigPageState extends State<ZoneNameConfigPage> {
         controller.clear();
       }
 
-      // Delete all saved zone names
-      await ZoneNameLocalStorage.clearZoneNames();
+      // 🔥 FIX: Clear project-specific zone names with actual project name
+      await ZoneNameLocalStorage.clearZoneNamesForProject(widget.projectName);
 
       if (!mounted) return;
 
