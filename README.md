@@ -771,10 +771,7 @@ final Map<int, bool> _bellConfirmationStatus = {};
 
 // Check if device has active bell
 bool hasActiveBell(int deviceAddress) {
-  return _bellConfirmationStatus[deviceAddress] ?? false;
-}
-```
-
+  return _bellConfirmationStatus[deviceAddress] ?? fal1```
 ---
 
 ## File Reference

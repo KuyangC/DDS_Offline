@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../monitoring/offline_monitoring_page.dart';
 import '../connection/zone_name_config_page.dart';
 import '../../../data/services/logger.dart';
-import '../../../data/datasources/local/zone_name_local_storage.dart';
+import '../../../data/datasources/local/zone_mapping_service.dart';
 
 /// Connection Configuration Page
 ///
@@ -29,6 +31,7 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
   // UI state
   bool _isLoading = false;
   String? _errorMessage;
+  bool _isConfiguringMapping = false;
 
   // Constants
   static const String _defaultIP = '192.168.1.100';
@@ -179,6 +182,11 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
     );
   }
 
+  /// Configure zone mapping folder directly
+  Future<void> _navigateToZoneMappingConfig() async {
+    await _selectZoneMappingFolder();
+  }
+
   /// Shows success snackbar message
   void _showSuccessSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -197,6 +205,293 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
         content: Text(message),
         backgroundColor: Colors.red,
         duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// Select zone mapping folder
+  Future<void> _selectZoneMappingFolder() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isConfiguringMapping = true;
+    });
+
+    try {
+      // Use native Android Intent folder picker with fallback
+      String? selectedDirectory = await _openFolderPicker();
+
+      if (selectedDirectory != null && selectedDirectory.isNotEmpty) {
+        // Validate the selected folder
+        final foundZones = await ZoneMappingService.validateMappingFolder(selectedDirectory);
+
+        if (foundZones.isEmpty) {
+          // Get detailed analysis of why validation failed
+          final analysis = await ZoneMappingService.analyzeFolder(selectedDirectory);
+          _showDetailedAnalysisDialog(analysis, selectedDirectory);
+        } else {
+          // Save the folder path
+          final success = await ZoneMappingService.saveMappingFolderPath(selectedDirectory);
+          if (success) {
+            _showSuccessSnackBar(
+              'Zone mapping folder configured successfully!\n'
+              'Found ${foundZones.length} zone mapping images\n'
+              'Path: $selectedDirectory'
+            );
+            AppLogger.info('Zone mapping configured with ${foundZones.length} images at: $selectedDirectory', tag: 'CONNECTION_CONFIG');
+          } else {
+            _showErrorSnackBar('Failed to save zone mapping configuration');
+          }
+        }
+      } else {
+        // User cancelled selection
+        AppLogger.info('User cancelled folder selection', tag: 'CONNECTION_CONFIG');
+      }
+
+    } catch (e) {
+      AppLogger.error('Error selecting zone mapping folder: $e', tag: 'CONNECTION_CONFIG');
+      _showErrorSnackBar('Failed to select zone mapping folder: ${e.toString()}');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isConfiguringMapping = false;
+        });
+      }
+    }
+  }
+
+  /// Open native folder picker with fallback options
+  Future<String?> _openFolderPicker() async {
+    AppLogger.info('Starting native folder picker attempt', tag: 'ZONE_MAPPING');
+
+    try {
+      // Android 13+ requires different permissions for media access
+      Map<Permission, PermissionStatus> statuses;
+
+      AppLogger.info('Requesting storage permissions...', tag: 'ZONE_MAPPING');
+
+      // Try to get all necessary permissions for folder access
+      statuses = await [
+        Permission.photos,
+        Permission.videos,
+        Permission.audio,
+        Permission.storage,
+        Permission.manageExternalStorage,
+      ].request();
+
+      // Check if we have any useful permission granted
+      final hasAnyPermission = statuses.values.any((status) => status.isGranted);
+
+      if (!hasAnyPermission) {
+        AppLogger.warning('No storage permissions granted - using manual input', tag: 'ZONE_MAPPING');
+        _showErrorSnackBar('Storage permission required for folder access');
+        return await _showManualFolderInputDialog();
+      }
+
+      AppLogger.info('Permissions granted - opening folder picker', tag: 'ZONE_MAPPING');
+
+      // Try native file picker
+      String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Select Zone Mapping Folder',
+        lockParentWindow: false,
+      );
+
+      if (selectedDirectory != null && selectedDirectory.isNotEmpty) {
+        AppLogger.info('Folder selected: $selectedDirectory', tag: 'ZONE_MAPPING');
+        return selectedDirectory;
+      } else {
+        AppLogger.info('Folder picker cancelled - using manual input', tag: 'ZONE_MAPPING');
+        return await _showManualFolderInputDialog();
+      }
+    } catch (e) {
+      AppLogger.error('Exception in folder picker: $e', tag: 'ZONE_MAPPING');
+      _showErrorSnackBar('Failed to open native folder picker');
+      return await _showManualFolderInputDialog();
+    }
+  }
+
+  /// Show manual folder input dialog as fallback
+  Future<String?> _showManualFolderInputDialog() async {
+    final TextEditingController controller = TextEditingController();
+
+    return showDialog<String?>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Zone Mapping Folder'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green[200]!),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.folder_open, color: Colors.green[700]),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Enter the path to your zone mapping folder.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.green[700],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Image Requirements:',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('• File names: 1.jpg, 2.jpg, 3.jpg, etc.'),
+                      Text('• Formats: .jpg, .jpeg, .png, .gif, .bmp, .webp'),
+                      Text('• All images in one folder'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Common Paths:',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('/storage/emulated/0/ZoneMappings', style: TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                      Text('/storage/emulated/0/Download/ZoneImages', style: TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                      Text('/sdcard/Documents/FireAlarmZones', style: TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: controller,
+                  decoration: InputDecoration(
+                    labelText: 'Enter Folder Path',
+                    hintText: '/storage/emulated/0/ZoneMappings',
+                    border: const OutlineInputBorder(),
+                    filled: true,
+                    fillColor: Colors.grey[50],
+                    prefixIcon: const Icon(Icons.folder),
+                  ),
+                  autofocus: true,
+                  maxLines: 2,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.cancel),
+              label: const Text('Cancel'),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                final path = controller.text.trim();
+                if (path.isNotEmpty) {
+                  Navigator.of(context).pop(path);
+                } else {
+                  _showErrorSnackBar('Please enter a folder path');
+                }
+              },
+              icon: const Icon(Icons.check_circle),
+              label: const Text('Select Folder'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green[600],
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Show detailed folder analysis dialog
+  void _showDetailedAnalysisDialog(String analysis, String folderPath) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.folder_open, color: Colors.orange[600]),
+            const SizedBox(width: 8),
+            const Text('Folder Analysis'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '📂 Path: $folderPath',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                analysis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'monospace',
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _selectZoneMappingFolder();
+            },
+            child: const Text('Try Different Folder'),
+          ),
+        ],
       ),
     );
   }
@@ -244,6 +539,8 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
                   _buildModuleCountField(),
                   const SizedBox(height: 16),
                   _buildZoneNameConfigButton(),
+                  const SizedBox(height: 8),
+                  _buildZoneMappingConfigButton(),
                   const SizedBox(height: 24),
                   _buildInfoCard(),
                   const SizedBox(height: 24),
@@ -411,6 +708,32 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
       label: const Text('Configure Zone Names'),
       style: ElevatedButton.styleFrom(
         backgroundColor: Colors.orange.shade700,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+    );
+  }
+
+  /// Builds zone mapping configuration button
+  Widget _buildZoneMappingConfigButton() {
+    return ElevatedButton.icon(
+      onPressed: _isConfiguringMapping ? null : _navigateToZoneMappingConfig,
+      icon: _isConfiguringMapping
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              ),
+            )
+          : const Icon(Icons.map),
+      label: Text(_isConfiguringMapping ? 'Configuring...' : 'Configure Zone Mapping'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.purple.shade700,
         foregroundColor: Colors.white,
         padding: const EdgeInsets.symmetric(vertical: 14),
         shape: RoundedRectangleBorder(
