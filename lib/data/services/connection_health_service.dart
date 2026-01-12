@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'logger.dart';
+import 'arp_service.dart';
 
 /// Connection Health Service untuk testing network reachability
 /// Provides pre-connection testing to avoid unnecessary WebSocket connection attempts
@@ -229,7 +230,7 @@ class ConnectionHealthService {
     for (final network in baseNetworks) {
       AppLogger.info('Scanning network: $network.x', tag: _tag);
 
-      for (int i = 1; i <= maxIPRange && i <= 50; i++) { // Limit scan to first 50 IPs
+      for (int i = 1; i <= maxIPRange && i <= 254; i++) { // Limit scan to first 254 IPs
         final host = '$network.$i';
 
         // Test all ports for this host
@@ -262,6 +263,122 @@ class ConnectionHealthService {
 
     AppLogger.info('Discovery completed. Found ${results.length} devices.', tag: _tag);
     return results;
+  }
+
+  /// Optimized ESP32 discovery for faster scanning
+  /// - Single attempt per port (no retries)
+  /// - Faster timeout (500ms default)
+  /// - Parallel port testing
+  /// - Stops after finding maxDevices
+  /// - Enriches results with MAC address and manufacturer from ARP table
+  static Future<List<DiscoveryResult>> discoverESP32DevicesOptimized({
+    List<String> baseNetworks = const ['192.168.1', '192.168.0', '10.0.0'],
+    List<int> ports = const [80, 81, 8080],
+    int maxIPRange = 50,
+    Duration? timeout = const Duration(milliseconds: 500),
+    int maxDevices = 10,
+  }) async {
+    final results = <DiscoveryResult>[];
+
+    AppLogger.info('Starting FAST ESP32 discovery (maxIPRange=$maxIPRange, maxDevices=$maxDevices)', tag: _tag);
+
+    // Get ARP table for MAC address and manufacturer lookup
+    final arpTable = await ArpService.getArpTable();
+    AppLogger.info('Loaded ${arpTable.length} ARP entries for device identification', tag: _tag);
+
+    // Create IP->ARP lookup map
+    final arpMap = <String, ArpEntry>{};
+    for (final entry in arpTable) {
+      arpMap[entry.ip] = entry;
+    }
+
+    for (final network in baseNetworks) {
+      AppLogger.info('Scanning network: $network.x', tag: _tag);
+
+      for (int i = 1; i <= maxIPRange && i <= 254; i++) {
+        final host = '$network.$i';
+
+        // Fast parallel port test (single attempt, no retry)
+        final portResults = await _testCommonPortsFast(host, ports: ports, timeout: timeout!);
+        final reachablePorts = portResults.where((r) => r.isReachable).toList();
+
+        if (reachablePorts.isNotEmpty) {
+          final bestPort = reachablePorts.first.port;
+          final bestTime = reachablePorts.first.responseTime;
+
+          // Look up MAC and manufacturer from ARP table
+          final arpEntry = arpMap[host];
+
+          results.add(DiscoveryResult(
+            host: host,
+            reachablePorts: reachablePorts.map((p) => PortTestResult(
+              port: p.port,
+              result: ConnectionTestResult(isReachable: true, responseTime: p.responseTime),
+            )).toList(),
+            bestPort: bestPort,
+            bestResponseTime: bestTime,
+            macAddress: arpEntry?.mac,
+            manufacturer: arpEntry?.manufacturer,
+          ));
+
+          final mfrStr = arpEntry?.manufacturer != null ? ' (${arpEntry!.manufacturer})' : '';
+          AppLogger.info('🎯 Found ESP32 at $host:$bestPort (${bestTime?.inMilliseconds ?? 0}ms)$mfrStr', tag: _tag);
+
+          // Stop if we found enough devices
+          if (results.length >= maxDevices) {
+            AppLogger.info('Found $maxDevices devices, stopping scan', tag: _tag);
+            break;
+          }
+        }
+      }
+
+      // Stop scanning networks if we found enough devices
+      if (results.length >= maxDevices) {
+        break;
+      }
+    }
+
+    // Sort by best response time
+    results.sort((a, b) {
+      if (a.bestResponseTime != null && b.bestResponseTime != null) {
+        return a.bestResponseTime!.inMilliseconds.compareTo(b.bestResponseTime!.inMilliseconds);
+      }
+      return 0;
+    });
+
+    AppLogger.info('Fast discovery completed. Found ${results.length} devices.', tag: _tag);
+    return results;
+  }
+
+  /// Fast port test - single attempt per port, parallel testing
+  static Future<List<_FastPortResult>> _testCommonPortsFast(
+    String host, {
+    required List<int> ports,
+    required Duration timeout,
+  }) async {
+    final results = await Future.wait(
+      ports.map((port) => _testPortFast(host, port, timeout)),
+    );
+
+    return results;
+  }
+
+  /// Fast single-attempt port test
+  static Future<_FastPortResult> _testPortFast(
+    String host,
+    int port,
+    Duration timeout,
+  ) async {
+    final stopwatch = Stopwatch()..start();
+
+    try {
+      await Socket.connect(host, port, timeout: timeout).timeout(timeout);
+      stopwatch.stop();
+      return _FastPortResult(port, true, stopwatch.elapsed);
+    } catch (_) {
+      stopwatch.stop();
+      return _FastPortResult(port, false, null);
+    }
   }
 }
 
@@ -314,20 +431,44 @@ class DiscoveryResult {
   final List<PortTestResult> reachablePorts;
   final int bestPort;
   final Duration? bestResponseTime;
+  final String? macAddress;
+  final String? manufacturer;
 
   const DiscoveryResult({
     required this.host,
     required this.reachablePorts,
     required this.bestPort,
     this.bestResponseTime,
+    this.macAddress,
+    this.manufacturer,
   });
 
   String get bestAddress => '$host:$bestPort';
 
+  DiscoveryResult copyWith({
+    String? host,
+    List<PortTestResult>? reachablePorts,
+    int? bestPort,
+    Duration? bestResponseTime,
+    String? macAddress,
+    String? manufacturer,
+  }) {
+    return DiscoveryResult(
+      host: host ?? this.host,
+      reachablePorts: reachablePorts ?? this.reachablePorts,
+      bestPort: bestPort ?? this.bestPort,
+      bestResponseTime: bestResponseTime ?? this.bestResponseTime,
+      macAddress: macAddress ?? this.macAddress,
+      manufacturer: manufacturer ?? this.manufacturer,
+    );
+  }
+
   @override
   String toString() {
     final timeStr = bestResponseTime != null ? ' (${bestResponseTime!.inMilliseconds}ms)' : '';
-    return 'ESP32 at $bestAddress$timeStr';
+    final macStr = macAddress != null ? ' | MAC: $macAddress' : '';
+    final mfrStr = manufacturer != null ? ' ($manufacturer)' : '';
+    return 'ESP32 at $bestAddress$timeStr$macStr$mfrStr';
   }
 }
 
@@ -342,4 +483,13 @@ enum ConnectionErrorType {
   socketError,
   allAttemptsFailed,
   unknownError,
+}
+
+/// Fast port result for optimized scanning
+class _FastPortResult {
+  final int port;
+  final bool isReachable;
+  final Duration? responseTime;
+
+  const _FastPortResult(this.port, this.isReachable, this.responseTime);
 }

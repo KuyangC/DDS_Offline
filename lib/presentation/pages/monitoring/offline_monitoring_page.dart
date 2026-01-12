@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/services/logger.dart';
 import '../../../data/services/websocket_mode_manager.dart';
+import '../../../data/datasources/websocket/websocket_service.dart';
 import '../../../data/services/unified_ip_service.dart';
 import '../../../data/datasources/local/offline_settings_service.dart';
 import '../../../data/services/offline_performance_manager.dart';
@@ -25,7 +26,6 @@ import '../../../data/models/zone_status_model.dart';
 import '../../widgets/blinking_tab_header.dart';
 import '../../widgets/zone_detail_dialog.dart';
 import '../../widgets/exit_password_dialog.dart';
-import '../connection/offline_config_page.dart';
 import '../auth/login_page.dart';
 import '../../../main.dart';
 
@@ -97,6 +97,10 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
   bool _isDialogClosing = false;
   bool _disposed = false;
 
+  // 🔥 Auto-reconnect state
+  Timer? _autoReconnectTimer;
+  StreamSubscription<WebSocketStatus>? _wsStatusSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -160,6 +164,10 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         _initializeWebSocketMode();
       }
     });
+
+    // Start auto-save timer for activity logs
+    fireAlarmData.startActivityLogAutoSave();
+    AppLogger.info('Activity log auto-save timer started', tag: 'OFFLINE_MONITORING');
   }
 
   Future<void> _loadZoneNames() async {
@@ -464,6 +472,9 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // Mark as disposed to prevent periodic timer Provider access
     _disposed = true;
 
+    // 🔥 Stop auto-reconnect timer
+    _stopAutoReconnect();
+
     WidgetsBinding.instance.removeObserver(this);
 
     // Restore user preferred orientations when leaving the page
@@ -475,14 +486,27 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // 🚀 Dispose performance manager
     _performanceManager.dispose();
 
-    // Dispose WebSocket manager using global instance
-    WebSocketModeManager.instance.dispose();
+    // 🔥 CRITICAL FIX: JANGAN dispose singleton WebSocketModeManager!
+    // Ini digunakan seluruh app, jika di-dispose akan mematikan WebSocket connection
+    // dan mencegah auto-reconnect bekerja.
+    // Hanya cancel subscriptions, jangan dispose manager itself.
+    // WebSocketModeManager.instance.dispose(); // ❌ REMOVED - Ini penyebab tidak bisa auto-reconnect
 
     // 🔍 ENHANCED UI SYNC: Cancel WebSocket state subscription
     _webSocketStatusSubscription?.cancel();
 
     // 🔥 NEW: Cancel AutoRefreshService status subscription
     _autoRefreshStatusSubscription?.cancel();
+
+    // Stop activity log auto-save timer
+    try {
+      final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+      fireAlarmData.stopActivityLogAutoSave();
+      AppLogger.info('Activity log auto-save timer stopped', tag: 'OFFLINE_MONITORING');
+    } catch (e) {
+      // Provider might not be available during dispose
+      AppLogger.debug('Could not stop auto-save timer: $e', tag: 'OFFLINE_MONITORING');
+    }
 
     // Cancel auto-hide timer to prevent memory leaks
     _hideControlsTimer?.cancel();
@@ -571,10 +595,137 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         AppLogger.error('❌ Error setting up AutoRefreshService listener: $e', tag: 'UI_SYNC');
       }
 
+      // 🔥 Setup WebSocket connection status listener untuk auto-reconnect
+      _setupConnectionStatusListener();
+
       AppLogger.info('✅ WebSocket state listeners initialized', tag: 'UI_SYNC');
     } catch (e) {
       AppLogger.error('❌ Error setting up WebSocket listeners: $e', tag: 'UI_SYNC');
     }
+  }
+
+  /// 🔥 Setup WebSocket connection status listener untuk auto-reconnect
+  /// Mendeteksi disconnect dan langsung trigger reconnect
+  void _setupConnectionStatusListener() {
+    final wsManager = WebSocketModeManager.instance;
+
+    // Cancel existing subscription jika ada
+    _wsStatusSubscription?.cancel();
+
+    if (wsManager.webSocketManager == null) {
+      AppLogger.warning('WebSocketManager is null, will setup listener later', tag: 'AUTO_RECONNECT');
+      return;
+    }
+
+    _wsStatusSubscription = wsManager.webSocketManager!
+        .webSocketService.statusStream.listen((status) {
+
+      if (_disposed || !mounted) return;
+
+      AppLogger.debug('📡 WebSocket status: $status', tag: 'AUTO_RECONNECT');
+
+      if (status == WebSocketStatus.disconnected) {
+        AppLogger.warning('🔌 WebSocket disconnected! Triggering reconnect...', tag: 'AUTO_RECONNECT');
+        _triggerReconnect();
+      } else if (status == WebSocketStatus.connected) {
+        AppLogger.info('✅ WebSocket connected!', tag: 'AUTO_RECONNECT');
+      }
+    });
+
+    AppLogger.info('✅ WebSocket connection status listener setup complete', tag: 'AUTO_RECONNECT');
+  }
+
+  /// 🔥 Trigger reconnect saat disconnect terdeteksi
+  /// Ini dipanggil otomatis saat WebSocketStatus.disconnected
+  Future<void> _triggerReconnect() async {
+    if (_disposed || !mounted) return;
+
+    // Cancel timer yang ada untuk menghindari multiple reconnect attempts
+    _autoReconnectTimer?.cancel();
+
+    try {
+      final wsManager = WebSocketModeManager.instance;
+
+      // Cek apakah di WebSocket mode
+      if (!wsManager.isWebSocketMode) {
+        AppLogger.debug('Not in WebSocket mode, skipping reconnect', tag: 'AUTO_RECONNECT');
+        return;
+      }
+
+      // Jika manager null, inisialisasi dulu
+      if (wsManager.webSocketManager == null) {
+        AppLogger.warning('WebSocketManager is null, initializing...', tag: 'AUTO_RECONNECT');
+        final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+        await wsManager.initializeManager(fireAlarmData);
+      }
+
+      // Reconnect dengan IP yang tersimpan
+      final esp32IP = wsManager.esp32IP ?? widget.ip;
+      AppLogger.info('🔄 Attempting to reconnect to $esp32IP...', tag: 'AUTO_RECONNECT');
+
+      final success = await wsManager.webSocketManager!.connectToESP32(esp32IP);
+
+      if (success) {
+        AppLogger.info('✅ Reconnect successful!', tag: 'AUTO_RECONNECT');
+        // 🔥 Force UI refresh after reconnect
+        await _forceUIRefreshAfterReconnect();
+      } else {
+        AppLogger.warning('❌ Reconnect failed, scheduling retry...', tag: 'AUTO_RECONNECT');
+        // Schedule retry after 5 seconds jika gagal
+        _scheduleRetryReconnect();
+      }
+    } catch (e) {
+      AppLogger.error('Reconnect error: $e', tag: 'AUTO_RECONNECT');
+      // Schedule retry jika terjadi error
+      _scheduleRetryReconnect();
+    }
+  }
+
+  /// 🔥 Schedule retry reconnect setelah delay
+  void _scheduleRetryReconnect() {
+    if (_disposed || !mounted) return;
+
+    _autoReconnectTimer?.cancel();
+
+    _autoReconnectTimer = Timer(const Duration(seconds: 5), () {
+      if (!_disposed && mounted) {
+        AppLogger.info('🔄 Retrying reconnect...', tag: 'AUTO_RECONNECT');
+        _triggerReconnect();
+      }
+    });
+  }
+
+  /// 🔥 Force UI refresh after successful reconnect
+  /// Ini penting untuk memastikan UI menampilkan data terbaru setelah ESP reconnect
+  Future<void> _forceUIRefreshAfterReconnect() async {
+    try {
+      if (_disposed || !mounted) return;
+
+      final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+
+      // Force process pending data yang mungkin ada saat disconnect
+      await fireAlarmData.forceProcessPendingData();
+
+      // Force UI rebuild dengan setState
+      if (mounted) {
+        setState(() {
+          // Trigger UI rebuild untuk update tampilan
+        });
+      }
+
+      AppLogger.info('✅ UI refresh forced after reconnect', tag: 'AUTO_RECONNECT');
+    } catch (e) {
+      AppLogger.error('Error forcing UI refresh: $e', tag: 'AUTO_RECONNECT');
+    }
+  }
+
+  /// 🔥 Stop auto-reconnect timer dan cancel subscriptions
+  void _stopAutoReconnect() {
+    _autoReconnectTimer?.cancel();
+    _autoReconnectTimer = null;
+    _wsStatusSubscription?.cancel();
+    _wsStatusSubscription = null;
+    AppLogger.info('❌ Auto-reconnect stopped', tag: 'AUTO_RECONNECT');
   }
 
   /// Auto-hide controls timer methods
@@ -1736,13 +1887,46 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
       itemCount: dateLogs.length,
       itemBuilder: (context, index) {
         final log = dateLogs[index];
+        final logType = log['type'] as String?;
+
+        // Tentukan warna border berdasarkan type
+        Color borderColor;
+        double borderWidth;
+
+        switch (logType) {
+          case 'alarm':
+          case 'DISCONNECT_WARNING':
+            borderColor = Colors.red.shade400; // Merah untuk alarm/warning
+            borderWidth = 2.0;
+            break;
+          case 'trouble':
+            borderColor = Colors.orange.shade400; // Kuning/oranye untuk trouble
+            borderWidth = 2.0;
+            break;
+          case 'normal':
+          case 'RECONNECTED':
+            borderColor = Colors.green.shade400; // Hijau untuk normal/reconnect
+            borderWidth = 2.0;
+            break;
+          case 'connection':
+            borderColor = Colors.blue.shade400; // Biru untuk connection info
+            borderWidth = 1.5;
+            break;
+          default:
+            borderColor = Colors.grey.shade200; // Default grey
+            borderWidth = 1.0;
+        }
+
         return Container(
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(
+              color: borderColor,
+              width: borderWidth,
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.grey.withValues(alpha: 0.03),

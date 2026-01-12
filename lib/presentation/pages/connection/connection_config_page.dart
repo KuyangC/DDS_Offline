@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../monitoring/offline_monitoring_page.dart';
 import '../connection/zone_name_config_page.dart';
 import '../../../data/services/logger.dart';
+import '../../../data/services/connection_health_service.dart';
 import '../../../data/datasources/local/zone_mapping_service.dart';
 
 /// Connection Configuration Page
@@ -32,6 +33,10 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
   bool _isLoading = false;
   String? _errorMessage;
   bool _isConfiguringMapping = false;
+
+  // Network discovery state
+  bool _isScanning = false;
+  List<DiscoveryResult> _discoveredDevices = [];
 
   // Constants
   static const String _defaultIP = '192.168.1.100';
@@ -641,11 +646,23 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
         labelText: 'IP Address',
         hintText: _defaultIP,
         prefixIcon: const Icon(Icons.computer),
+        suffixIcon: IconButton(
+          icon: _isScanning
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.search, color: Colors.blue),
+          onPressed: _isScanning ? null : _startNetworkScan,
+          tooltip: 'Scan Network for ESP32',
+        ),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         filled: true,
         fillColor: Colors.white,
       ),
       validator: _validateIP,
+      readOnly: _isScanning,
     );
   }
 
@@ -842,6 +859,307 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
         color: Colors.grey[500],
       ),
       textAlign: TextAlign.center,
+    );
+  }
+
+  // Network Discovery Methods
+
+  /// Start network scanning for ESP32 devices
+  Future<void> _startNetworkScan() async {
+    setState(() {
+      _isScanning = true;
+      _discoveredDevices = [];
+    });
+
+    // Show scanning dialog
+    _showScanningDialog();
+
+    try {
+      AppLogger.info('Starting network scan...', tag: 'CONNECTION_CONFIG');
+
+      // Optimized scan: faster timeout, limited range, stop after finding devices
+      final results = await ConnectionHealthService.discoverESP32DevicesOptimized(
+        baseNetworks: const ['192.168.1', '192.168.0', '10.0.0'],
+        ports: const [80, 81, 8080],
+        maxIPRange: 50, // Limit to first 50 IPs per network (faster scan)
+        timeout: const Duration(milliseconds: 500), // 500ms is enough for local network
+        maxDevices: 10, // Stop after finding 10 devices
+      );
+
+      AppLogger.info('Scan found ${results.length} devices', tag: 'CONNECTION_CONFIG');
+
+      if (mounted) {
+        Navigator.of(context).pop(); // Close scanning dialog
+        setState(() => _isScanning = false);
+
+        if (results.isNotEmpty) {
+          _showDiscoveryResults(results);
+        } else {
+          _showNoDevicesFound();
+        }
+      }
+    } catch (e, stackTrace) {
+      AppLogger.error('Scan failed', tag: 'CONNECTION_CONFIG', error: e, stackTrace: stackTrace);
+      if (mounted) {
+        Navigator.of(context).pop();
+        setState(() => _isScanning = false);
+        _showErrorSnackBar('Scan failed: ${e.toString()}');
+      }
+    }
+  }
+
+  /// Show scanning progress dialog
+  void _showScanningDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            const Text('Scanning Network...'),
+            const SizedBox(height: 8),
+            Text(
+              '192.168.1.x • 192.168.0.x • 10.0.0.x (first 50 IPs each)',
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Estimated: ~30-60 seconds',
+              style: TextStyle(fontSize: 11, color: Colors.blue[700], fontStyle: FontStyle.italic),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Show discovery results bottom sheet
+  void _showDiscoveryResults(List<DiscoveryResult> results) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      enableDrag: false, // Prevent swipe-to-dismiss
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.6,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Handle bar (visual only, swipe disabled)
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Header with Close button
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Text(
+                    'Found ${results.length} ESP32 Device${results.length > 1 ? 's' : ''}',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.builder(
+                itemCount: results.length,
+                itemBuilder: (context, index) => _buildDeviceTile(results[index]),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Get connection strength label based on response time
+  String _getConnectionStrength(int responseTimeMs) {
+    if (responseTimeMs < 50) return 'Excellent';
+    if (responseTimeMs < 100) return 'Good';
+    if (responseTimeMs < 200) return 'Fair';
+    return 'Slow';
+  }
+
+  /// Get connection strength color based on response time
+  Color _getConnectionStrengthColor(int responseTimeMs) {
+    if (responseTimeMs < 50) return Colors.green;
+    if (responseTimeMs < 100) return Colors.lightGreen;
+    if (responseTimeMs < 200) return Colors.orange;
+    return Colors.red;
+  }
+
+  /// Build device list tile
+  Widget _buildDeviceTile(DiscoveryResult device) {
+    final responseTime = device.bestResponseTime?.inMilliseconds ?? 0;
+    final color = _getConnectionStrengthColor(responseTime);
+    final strength = _getConnectionStrength(responseTime);
+    final hasMacInfo = device.macAddress != null || device.manufacturer != null;
+
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      leading: CircleAvatar(
+        backgroundColor: color,
+        radius: 20,
+        child: Icon(Icons.check, color: Colors.white, size: 20),
+      ),
+      title: Row(
+        children: [
+          Icon(Icons.computer, size: 18, color: Colors.grey[700]),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              device.host,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+            ),
+          ),
+        ],
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 4),
+          // MAC Address & Manufacturer row (if available)
+          if (hasMacInfo) ...[
+            Row(
+              children: [
+                Icon(Icons.fingerprint, size: 14, color: Colors.purple),
+                const SizedBox(width: 4),
+                if (device.macAddress != null)
+                  Text(
+                    device.macAddress!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: Colors.purple[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                if (device.manufacturer != null) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.purple[100],
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      device.manufacturer!,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.purple[800],
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 2),
+          ],
+          // Speed & Connection Strength
+          Row(
+            children: [
+              Icon(Icons.speed, size: 14, color: color),
+              const SizedBox(width: 4),
+              Text(
+                '${responseTime}ms',
+                style: TextStyle(color: color, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '• $strength Connection',
+                style: TextStyle(color: color, fontSize: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          // Port info
+          Row(
+            children: [
+              Icon(Icons.settings_ethernet, size: 14, color: Colors.grey[600]),
+              const SizedBox(width: 4),
+              Text(
+                'Port: ${device.bestPort}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              ),
+              if (device.reachablePorts.length > 1) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '+${device.reachablePorts.length - 1} more',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Colors.blue,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 2),
+          // WebSocket URL
+          Row(
+            children: [
+              Icon(Icons.link, size: 14, color: Colors.grey[600]),
+              const SizedBox(width: 4),
+              Text(
+                'ws://${device.bestAddress}',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+      onTap: () {
+        _ipController.text = device.host;
+        _portController.text = device.bestPort.toString();
+        Navigator.pop(context);
+        _showSuccessSnackBar('Selected: ${device.bestAddress}');
+        AppLogger.info('Selected ESP32: ${device.bestAddress}', tag: 'CONNECTION_CONFIG');
+      },
+    );
+  }
+
+  /// Show no devices found dialog
+  void _showNoDevicesFound() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.search_off, size: 32, color: Colors.orange[700]),
+        title: const Text('No Devices Found'),
+        content: const Text(
+          'Make sure ESP32 is powered on and connected to the same network',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
     );
   }
 

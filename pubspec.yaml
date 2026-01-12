@@ -75,6 +75,12 @@ dependencies:
   # Path Provider (for file system access)
   path_provider: ^2.0.14
 
+  # SQLite for persistent storage
+  sqflite: ^2.3.0
+
+  # Path package for file path operations
+  path: ^1.8.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
