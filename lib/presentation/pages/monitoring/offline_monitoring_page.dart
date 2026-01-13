@@ -70,9 +70,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
   // WebSocket manager removed - using global WebSocketModeManager instead
   // This prevents race conditions and multiple manager conflicts
 
-  // WebSocket state subscription for enhanced real-time updates
-  StreamSubscription? _webSocketStatusSubscription;
-
   // 🔥 NEW: Disconnect status untuk offline mode
   bool _isDisconnected = false;
   StreamSubscription? _autoRefreshStatusSubscription;
@@ -96,10 +93,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
   bool _isNavigating = false;
   bool _isDialogClosing = false;
   bool _disposed = false;
-
-  // 🔥 Auto-reconnect state
-  Timer? _autoReconnectTimer;
-  StreamSubscription<WebSocketStatus>? _wsStatusSubscription;
 
   @override
   void initState() {
@@ -127,9 +120,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
     // Initialize tab section with sample data
     _initializeTabSection();
-
-    // 🔍 ENHANCED UI SYNC: Add WebSocket state listeners
-    _setupWebSocketStateListeners();
   }
 
   @override
@@ -472,9 +462,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // Mark as disposed to prevent periodic timer Provider access
     _disposed = true;
 
-    // 🔥 Stop auto-reconnect timer
-    _stopAutoReconnect();
-
     WidgetsBinding.instance.removeObserver(this);
 
     // Restore user preferred orientations when leaving the page
@@ -491,9 +478,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // dan mencegah auto-reconnect bekerja.
     // Hanya cancel subscriptions, jangan dispose manager itself.
     // WebSocketModeManager.instance.dispose(); // ❌ REMOVED - Ini penyebab tidak bisa auto-reconnect
-
-    // 🔍 ENHANCED UI SYNC: Cancel WebSocket state subscription
-    _webSocketStatusSubscription?.cancel();
 
     // 🔥 NEW: Cancel AutoRefreshService status subscription
     _autoRefreshStatusSubscription?.cancel();
@@ -529,203 +513,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         _displayModules--;
       }
     });
-  }
-
-  /// 🔍 ENHANCED UI SYNC: Setup WebSocket state listeners for real-time updates
-  void _setupWebSocketStateListeners() {
-    try {
-      AppLogger.info('🚀 INITIALIZING WebSocket state listeners', tag: 'UI_SYNC');
-
-      // Store reference to context for safe access in callbacks
-      final currentContext = context;
-
-      // Alternative approach: Use periodic timer to check WebSocket status
-      // and listen to FireAlarmData changes for zone updates
-      _webSocketStatusSubscription = Stream.periodic(Duration(seconds: 2), (_) {
-        // Check WebSocket connection status through FireAlarmData
-        try {
-          // Multiple safety checks to prevent Provider access after disposal
-          if (_disposed || !currentContext.mounted) {
-            return -1; // Signal to stop stream
-          }
-
-          final fireAlarmData = Provider.of<FireAlarmData>(currentContext, listen: false);
-          final isConnected = fireAlarmData.isWebSocketConnected ? 1 : 0;
-          AppLogger.info('🔗 WebSocket status check: ${isConnected == 1}', tag: 'UI_SYNC');
-          return isConnected;
-        } catch (e) {
-          // Silently handle Provider access errors - don't log as warnings to reduce noise
-          return -1; // Signal error or disposal
-        }
-      }).where((status) => status >= 0).listen((isConnected) {
-        if (!_disposed && mounted && isConnected >= 0) {
-          // Trigger UI refresh if connection status changes
-          setState(() {});
-        }
-      });
-
-      // 🔥 NEW: Listen to AutoRefreshService untuk disconnect status (OFFLINE MODE)
-      try {
-        final autoRefreshService = AutoRefreshService.instance;
-
-        // Listen to status changes
-        _autoRefreshStatusSubscription = autoRefreshService.statusStream.listen((status) {
-          if (_disposed || !mounted) return;
-
-          // 🔥 FIX: Disconnect berdasarkan DATA, bukan AutoRefreshService
-          final wasDisconnected = _isDisconnected;
-
-          // Check apakah ada data yang valid
-          final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
-          final hasData = fireAlarmData.hasValidZoneData;
-
-          // Jika ada data zone, berarti CONNECTED
-          final isNowDisconnected = !hasData;
-
-          if (wasDisconnected != isNowDisconnected) {
-            setState(() {
-              _isDisconnected = isNowDisconnected;
-            });
-            print('🔌 Disconnect status changed: $_isDisconnected (hasValidZoneData=$hasData)');
-          }
-        });
-
-        AppLogger.info('✅ AutoRefreshService disconnect listener initialized', tag: 'UI_SYNC');
-      } catch (e) {
-        AppLogger.error('❌ Error setting up AutoRefreshService listener: $e', tag: 'UI_SYNC');
-      }
-
-      // 🔥 Setup WebSocket connection status listener untuk auto-reconnect
-      _setupConnectionStatusListener();
-
-      AppLogger.info('✅ WebSocket state listeners initialized', tag: 'UI_SYNC');
-    } catch (e) {
-      AppLogger.error('❌ Error setting up WebSocket listeners: $e', tag: 'UI_SYNC');
-    }
-  }
-
-  /// 🔥 Setup WebSocket connection status listener untuk auto-reconnect
-  /// Mendeteksi disconnect dan langsung trigger reconnect
-  void _setupConnectionStatusListener() {
-    final wsManager = WebSocketModeManager.instance;
-
-    // Cancel existing subscription jika ada
-    _wsStatusSubscription?.cancel();
-
-    if (wsManager.webSocketManager == null) {
-      AppLogger.warning('WebSocketManager is null, will setup listener later', tag: 'AUTO_RECONNECT');
-      return;
-    }
-
-    _wsStatusSubscription = wsManager.webSocketManager!
-        .webSocketService.statusStream.listen((status) {
-
-      if (_disposed || !mounted) return;
-
-      AppLogger.debug('📡 WebSocket status: $status', tag: 'AUTO_RECONNECT');
-
-      if (status == WebSocketStatus.disconnected) {
-        AppLogger.warning('🔌 WebSocket disconnected! Triggering reconnect...', tag: 'AUTO_RECONNECT');
-        _triggerReconnect();
-      } else if (status == WebSocketStatus.connected) {
-        AppLogger.info('✅ WebSocket connected!', tag: 'AUTO_RECONNECT');
-      }
-    });
-
-    AppLogger.info('✅ WebSocket connection status listener setup complete', tag: 'AUTO_RECONNECT');
-  }
-
-  /// 🔥 Trigger reconnect saat disconnect terdeteksi
-  /// Ini dipanggil otomatis saat WebSocketStatus.disconnected
-  Future<void> _triggerReconnect() async {
-    if (_disposed || !mounted) return;
-
-    // Cancel timer yang ada untuk menghindari multiple reconnect attempts
-    _autoReconnectTimer?.cancel();
-
-    try {
-      final wsManager = WebSocketModeManager.instance;
-
-      // Cek apakah di WebSocket mode
-      if (!wsManager.isWebSocketMode) {
-        AppLogger.debug('Not in WebSocket mode, skipping reconnect', tag: 'AUTO_RECONNECT');
-        return;
-      }
-
-      // Jika manager null, inisialisasi dulu
-      if (wsManager.webSocketManager == null) {
-        AppLogger.warning('WebSocketManager is null, initializing...', tag: 'AUTO_RECONNECT');
-        final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
-        await wsManager.initializeManager(fireAlarmData);
-      }
-
-      // Reconnect dengan IP yang tersimpan
-      final esp32IP = wsManager.esp32IP ?? widget.ip;
-      AppLogger.info('🔄 Attempting to reconnect to $esp32IP...', tag: 'AUTO_RECONNECT');
-
-      final success = await wsManager.webSocketManager!.connectToESP32(esp32IP);
-
-      if (success) {
-        AppLogger.info('✅ Reconnect successful!', tag: 'AUTO_RECONNECT');
-        // 🔥 Force UI refresh after reconnect
-        await _forceUIRefreshAfterReconnect();
-      } else {
-        AppLogger.warning('❌ Reconnect failed, scheduling retry...', tag: 'AUTO_RECONNECT');
-        // Schedule retry after 5 seconds jika gagal
-        _scheduleRetryReconnect();
-      }
-    } catch (e) {
-      AppLogger.error('Reconnect error: $e', tag: 'AUTO_RECONNECT');
-      // Schedule retry jika terjadi error
-      _scheduleRetryReconnect();
-    }
-  }
-
-  /// 🔥 Schedule retry reconnect setelah delay
-  void _scheduleRetryReconnect() {
-    if (_disposed || !mounted) return;
-
-    _autoReconnectTimer?.cancel();
-
-    _autoReconnectTimer = Timer(const Duration(seconds: 5), () {
-      if (!_disposed && mounted) {
-        AppLogger.info('🔄 Retrying reconnect...', tag: 'AUTO_RECONNECT');
-        _triggerReconnect();
-      }
-    });
-  }
-
-  /// 🔥 Force UI refresh after successful reconnect
-  /// Ini penting untuk memastikan UI menampilkan data terbaru setelah ESP reconnect
-  Future<void> _forceUIRefreshAfterReconnect() async {
-    try {
-      if (_disposed || !mounted) return;
-
-      final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
-
-      // Force process pending data yang mungkin ada saat disconnect
-      await fireAlarmData.forceProcessPendingData();
-
-      // Force UI rebuild dengan setState
-      if (mounted) {
-        setState(() {
-          // Trigger UI rebuild untuk update tampilan
-        });
-      }
-
-      AppLogger.info('✅ UI refresh forced after reconnect', tag: 'AUTO_RECONNECT');
-    } catch (e) {
-      AppLogger.error('Error forcing UI refresh: $e', tag: 'AUTO_RECONNECT');
-    }
-  }
-
-  /// 🔥 Stop auto-reconnect timer dan cancel subscriptions
-  void _stopAutoReconnect() {
-    _autoReconnectTimer?.cancel();
-    _autoReconnectTimer = null;
-    _wsStatusSubscription?.cancel();
-    _wsStatusSubscription = null;
-    AppLogger.info('❌ Auto-reconnect stopped', tag: 'AUTO_RECONNECT');
   }
 
   /// Auto-hide controls timer methods
