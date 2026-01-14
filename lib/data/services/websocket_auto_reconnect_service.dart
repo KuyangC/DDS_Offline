@@ -24,8 +24,11 @@ class AutoReconnectConfig {
   /// Ping timeout
   static const Duration pingTimeout = Duration(seconds: 5);
 
-  /// ⭐ NEW: Max consecutive empty/invalid data before reconnect
+  /// Max consecutive empty/invalid data before reconnect
   static const int maxConsecutiveEmptyData = 5;
+
+  /// Max consecutive ping timeouts before reconnect (to avoid false positive)
+  static const int maxConsecutivePingTimeouts = 3;
 }
 
 /// Auto-reconnect status for UI
@@ -77,11 +80,17 @@ class WebSocketAutoReconnectService {
   /// Last ping timestamp (for timeout detection)
   DateTime? _lastPingTime;
 
-  /// ⭐ NEW: Last valid data reception timestamp
+  /// Last valid data reception timestamp
   DateTime? _lastValidDataTime;
 
-  /// ⭐ NEW: Consecutive empty/invalid data counter
+  /// Consecutive empty/invalid data counter
   int _consecutiveEmptyDataCount = 0;
+
+  /// Consecutive ping timeout counter
+  int _consecutivePingTimeouts = 0;
+
+  /// Flag to prevent multiple reconnect attempts
+  bool _isReconnectScheduled = false;
 
   /// Controller for status updates (UI can listen to this)
   final _statusController = StreamController<AutoReconnectStatus>.broadcast();
@@ -91,7 +100,7 @@ class WebSocketAutoReconnectService {
   final _countdownController = StreamController<int>.broadcast();
   Stream<int> get countdownStream => _countdownController.stream;
 
-  /// ⭐ NEW: Controller for data validation issues (UI can show warnings)
+  /// Controller for data validation issues (UI can show warnings)
   final _dataValidationController = StreamController<String>.broadcast();
   Stream<String> get dataValidationStream => _dataValidationController.stream;
 
@@ -117,17 +126,21 @@ class WebSocketAutoReconnectService {
       return;
     }
 
-    AppLogger.info('🚀 Starting auto-reconnect monitoring', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Starting auto-reconnect monitoring', tag: 'AUTO_RECONNECT');
 
     _webSocketManager = webSocketManager;
     _esp32IP = esp32IP;
     _isMonitoring = true;
     _retryCount = 0;
+    _isReconnectScheduled = false;
+    _consecutiveEmptyDataCount = 0;
+    _consecutivePingTimeouts = 0;
+    _lastValidDataTime = DateTime.now();
 
-    // Listen to WebSocket status changes
+    // Listen to WebSocket status changes ONLY
     _setupStatusListener();
 
-    // Listen to WebSocket messages (for pong response)
+    // Listen to WebSocket messages (for pong response & data validation)
     _setupMessageListener();
 
     // Start health check
@@ -140,9 +153,10 @@ class WebSocketAutoReconnectService {
   void stopMonitoring() {
     if (!_isMonitoring) return;
 
-    AppLogger.info('🛑 Stopping auto-reconnect monitoring', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Stopping auto-reconnect monitoring', tag: 'AUTO_RECONNECT');
 
     _isMonitoring = false;
+    _isReconnectScheduled = false;
 
     // Cancel all timers
     _retryTimer?.cancel();
@@ -159,9 +173,8 @@ class WebSocketAutoReconnectService {
     // Reset state
     _retryCount = 0;
     _isReconnecting = false;
-
-    // ⭐ NEW: Reset data validation counters
     _consecutiveEmptyDataCount = 0;
+    _consecutivePingTimeouts = 0;
     _lastValidDataTime = null;
 
     _updateStatus(AutoReconnectStatus.idle);
@@ -169,17 +182,18 @@ class WebSocketAutoReconnectService {
 
   /// Force manual reconnect (reset retry counter)
   Future<bool> forceReconnect() async {
-    AppLogger.info('🔄 Manual reconnect requested', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Manual reconnect requested', tag: 'AUTO_RECONNECT');
 
     // Reset retry counter
     _retryCount = 0;
+    _isReconnectScheduled = false;
 
     // Cancel any pending retry
     _retryTimer?.cancel();
     _retryTimer = null;
 
-    // Attempt reconnect immediately
-    return await _attemptReconnect();
+    // Schedule immediate reconnect
+    return await _scheduleReconnect(immediate: true);
   }
 
   /// Get current retry status for UI
@@ -200,16 +214,18 @@ class WebSocketAutoReconnectService {
     if (_webSocketManager == null) return;
 
     _statusSubscription = _webSocketManager!.webSocketService.statusStream.listen((status) {
-      AppLogger.debug('📡 WebSocket status: $status', tag: 'AUTO_RECONNECT');
+      AppLogger.debug('WebSocket status: $status', tag: 'AUTO_RECONNECT');
 
       if (status == WebSocketStatus.disconnected) {
         // Connection lost, trigger reconnect
-        if (_isMonitoring && !_isReconnecting) {
-          AppLogger.warning('🔌 Connection lost! Triggering reconnect...', tag: 'AUTO_RECONNECT');
-          _scheduleRetry();
+        if (_isMonitoring && !_isReconnectScheduled) {
+          AppLogger.warning('Connection lost! Triggering reconnect...', tag: 'AUTO_RECONNECT');
+          _scheduleReconnect();
         }
       } else if (status == WebSocketStatus.connected) {
         // Connected successfully
+        AppLogger.info('WebSocket connected event received', tag: 'AUTO_RECONNECT');
+
         if (_isReconnecting) {
           _onReconnectSuccess();
         } else {
@@ -218,7 +234,7 @@ class WebSocketAutoReconnectService {
       }
     });
 
-    AppLogger.info('✅ WebSocket status listener setup complete', tag: 'AUTO_RECONNECT');
+    AppLogger.info('WebSocket status listener setup complete', tag: 'AUTO_RECONNECT');
   }
 
   /// Setup WebSocket message listener (for pong response & data validation)
@@ -226,21 +242,23 @@ class WebSocketAutoReconnectService {
     if (_webSocketManager == null) return;
 
     _messageSubscription = _webSocketManager!.webSocketService.messageStream.listen((message) {
-      // Check for pong response
-      if (message.data.contains('pong') || message.data.contains('PONG')) {
-        AppLogger.debug('🏓 Pong received', tag: 'AUTO_RECONNECT');
+      // Check for pong response (case-insensitive)
+      final lowerCaseData = message.data.toLowerCase();
+      if (lowerCaseData.contains('pong') || lowerCaseData.contains('ping')) {
+        AppLogger.debug('Pong received: ${message.data}', tag: 'AUTO_RECONNECT');
         _lastPingTime = null; // Reset ping timeout
+        _consecutivePingTimeouts = 0; // Reset consecutive timeout counter
         return;
       }
 
-      // ⭐ NEW: Validate incoming data (detect empty/invalid data)
+      // Validate incoming data (detect empty/invalid data)
       _validateIncomingData(message.data);
     });
 
-    AppLogger.info('✅ WebSocket message listener setup complete with data validation', tag: 'AUTO_RECONNECT');
+    AppLogger.info('WebSocket message listener setup complete with data validation', tag: 'AUTO_RECONNECT');
   }
 
-  /// ⭐ NEW: Validate incoming data to detect empty/invalid data
+  /// Validate incoming data to detect empty/invalid data
   void _validateIncomingData(String data) {
     // Skip validation jika sedang reconnecting
     if (_isReconnecting) return;
@@ -252,7 +270,7 @@ class WebSocketAutoReconnectService {
       _consecutiveEmptyDataCount++;
 
       AppLogger.warning(
-        '⚠️ Empty data received (count: $_consecutiveEmptyDataCount/$AutoReconnectConfig.maxConsecutiveEmptyData)',
+        'Empty data received (count: $_consecutiveEmptyDataCount/$AutoReconnectConfig.maxConsecutiveEmptyData)',
         tag: 'DATA_VALIDATION',
       );
 
@@ -262,27 +280,25 @@ class WebSocketAutoReconnectService {
       // Trigger reconnect jika terlalu banyak empty data berturut-turut
       if (_consecutiveEmptyDataCount >= AutoReconnectConfig.maxConsecutiveEmptyData) {
         AppLogger.error(
-          '❌ Too many consecutive empty data ($_consecutiveEmptyDataCount). ESP32 might be dead!',
+          'Too many consecutive empty data ($_consecutiveEmptyDataCount). Triggering reconnect.',
           tag: 'DATA_VALIDATION',
         );
 
         // Notify UI about critical issue
         _dataValidationController.add('CRITICAL: ESP32 not sending data! Reconnecting...');
 
-        // Trigger reconnect
-        if (!_isReconnecting) {
-          _scheduleRetry();
-        }
+        // Trigger reconnect via status stream (disconnect first)
+        // This will be caught by status listener
       }
       return;
     }
 
     // 2. Check jika data adalah JSON kosong {} atau []
-    if (trimmedData == '{}' || trimmedData == '[]' || trimmedData == '""') {
+    if (trimmedData == '{}' || trimmedData == '[]' || trimmedData == '\"\"') {
       _consecutiveEmptyDataCount++;
 
       AppLogger.warning(
-        '⚠️ Empty JSON received: "$trimmedData" (count: $_consecutiveEmptyDataCount/$AutoReconnectConfig.maxConsecutiveEmptyData)',
+        'Empty JSON received: "$trimmedData" (count: $_consecutiveEmptyDataCount/$AutoReconnectConfig.maxConsecutiveEmptyData)',
         tag: 'DATA_VALIDATION',
       );
 
@@ -290,15 +306,11 @@ class WebSocketAutoReconnectService {
 
       if (_consecutiveEmptyDataCount >= AutoReconnectConfig.maxConsecutiveEmptyData) {
         AppLogger.error(
-          '❌ Too many consecutive empty JSON ($_consecutiveEmptyDataCount). ESP32 might be dead!',
+          'Too many consecutive empty JSON ($_consecutiveEmptyDataCount). Triggering reconnect.',
           tag: 'DATA_VALIDATION',
         );
 
         _dataValidationController.add('CRITICAL: ESP32 sending empty JSON! Reconnecting...');
-
-        if (!_isReconnecting) {
-          _scheduleRetry();
-        }
       }
       return;
     }
@@ -308,7 +320,7 @@ class WebSocketAutoReconnectService {
     _lastValidDataTime = DateTime.now();
 
     AppLogger.debug(
-      '✅ Valid data received (${trimmedData.length} chars)',
+      'Valid data received (${trimmedData.length} chars)',
       tag: 'DATA_VALIDATION',
     );
   }
@@ -323,14 +335,15 @@ class WebSocketAutoReconnectService {
       }
     });
 
-    AppLogger.info('✅ Health check started (interval: ${AutoReconnectConfig.healthCheckInterval.inSeconds}s)', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Health check started (interval: ${AutoReconnectConfig.healthCheckInterval.inSeconds}s)', tag: 'AUTO_RECONNECT');
   }
 
   /// Send ping to ESP32
   void _sendPing() {
-    if (_webSocketManager == null) return;
+    // Skip ping jika sedang reconnecting
+    if (_webSocketManager == null || _isReconnecting) return;
 
-    AppLogger.debug('🏓 Sending ping...', tag: 'AUTO_RECONNECT');
+    AppLogger.debug('Sending ping...', tag: 'AUTO_RECONNECT');
 
     // Store ping timestamp
     _lastPingTime = DateTime.now();
@@ -339,60 +352,89 @@ class WebSocketAutoReconnectService {
     try {
       _webSocketManager!.webSocketService.sendMessage('{"type":"ping"}');
 
-      // Check for timeout
+      // Check for timeout - HANYA jika tidak sedang reconnecting
       Future.delayed(AutoReconnectConfig.pingTimeout, () {
-        if (_lastPingTime != null && _isMonitoring) {
-          // Ping timeout - connection might be dead
-          AppLogger.warning('⏰ Ping timeout! Connection might be dead.', tag: 'AUTO_RECONNECT');
+        // Check jika masih monitoring, ping masih pending (belum di-reset oleh pong), dan tidak sedang reconnecting
+        if (_lastPingTime != null && _isMonitoring && !_isReconnecting) {
+          // Ping timeout detected
+          _consecutivePingTimeouts++;
 
-          // Trigger reconnect
-          if (!_isReconnecting) {
-            _scheduleRetry();
+          AppLogger.warning(
+            'Ping timeout detected ($_consecutivePingTimeouts/${AutoReconnectConfig.maxConsecutivePingTimeouts}). No pong response received.',
+            tag: 'AUTO_RECONNECT',
+          );
+
+          // Only trigger reconnect jika multiple timeouts berturut-turut (to avoid false positive)
+          if (_consecutivePingTimeouts >= AutoReconnectConfig.maxConsecutivePingTimeouts) {
+            AppLogger.error(
+              'Too many consecutive ping timeouts ($_consecutivePingTimeouts). Connection might be dead. Triggering reconnect.',
+              tag: 'AUTO_RECONNECT',
+            );
+
+            // Trigger reconnect by disconnecting first
+            // This will trigger status listener which will call _scheduleReconnect
+            _webSocketManager?.webSocketService.disconnect();
           }
         }
       });
     } catch (e) {
-      AppLogger.error('❌ Failed to send ping: $e', tag: 'AUTO_RECONNECT');
+      AppLogger.error('Failed to send ping: $e', tag: 'AUTO_RECONNECT');
       _lastPingTime = null;
     }
   }
 
-  /// Schedule retry with exponential backoff
-  void _scheduleRetry() {
-    // Check max retry
-    if (_retryCount >= AutoReconnectConfig.maxRetry) {
-      AppLogger.error('❌ Max retry reached (${AutoReconnectConfig.maxRetry}). Stopping auto-reconnect.', tag: 'AUTO_RECONNECT');
-      _updateStatus(AutoReconnectStatus.failed);
-      return;
+  /// Schedule reconnect with exponential backoff
+  Future<bool> _scheduleReconnect({bool immediate = false}) async {
+    // Prevent double scheduling
+    if (_isReconnectScheduled) {
+      AppLogger.warning('Reconnect already scheduled, skipping', tag: 'AUTO_RECONNECT');
+      return false;
     }
 
-    // Calculate delay
-    final delay = _getRetryDelay();
-    final delaySeconds = delay.inSeconds;
+    // Check max retry
+    if (_retryCount >= AutoReconnectConfig.maxRetry) {
+      AppLogger.error('Max retry reached (${AutoReconnectConfig.maxRetry}). Stopping auto-reconnect.', tag: 'AUTO_RECONNECT');
+      _updateStatus(AutoReconnectStatus.failed);
+      _isReconnectScheduled = false;
+      return false;
+    }
 
-    AppLogger.info('⏰ Scheduling retry in ${delaySeconds}s (attempt ${_retryCount + 1}/${AutoReconnectConfig.maxRetry})', tag: 'AUTO_RECONNECT');
-
+    _isReconnectScheduled = true;
     _updateStatus(AutoReconnectStatus.waiting);
 
-    // Countdown for UI
-    if (delaySeconds > 0) {
-      int countdown = delaySeconds;
-      _countdownController.add(countdown);
+    // Calculate delay
+    final delay = immediate ? Duration.zero : _getRetryDelay();
+    final delaySeconds = delay.inSeconds;
 
-      _retryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        countdown--;
+    if (!immediate) {
+      AppLogger.info('Scheduling retry in ${delaySeconds}s (attempt ${_retryCount + 1}/${AutoReconnectConfig.maxRetry})', tag: 'AUTO_RECONNECT');
+
+      // Countdown for UI
+      if (delaySeconds > 0) {
+        int countdown = delaySeconds;
         _countdownController.add(countdown);
 
-        if (countdown <= 0) {
-          timer.cancel();
-        }
-      });
+        final countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          countdown--;
+          _countdownController.add(countdown);
+
+          if (countdown <= 0) {
+            timer.cancel();
+          }
+        });
+
+        // Store countdown timer to cancel it when reconnect starts
+        _retryTimer = countdownTimer;
+      }
     }
 
     // Schedule reconnect
     _retryTimer = Timer(delay, () async {
+      _isReconnectScheduled = false;
       await _attemptReconnect();
     });
+
+    return true;
   }
 
   /// Get retry delay based on retry count (exponential backoff)
@@ -404,11 +446,11 @@ class WebSocketAutoReconnectService {
   /// Attempt reconnect to ESP32
   Future<bool> _attemptReconnect() async {
     if (_webSocketManager == null || _esp32IP == null) {
-      AppLogger.error('❌ WebSocket manager or ESP32 IP is null', tag: 'AUTO_RECONNECT');
+      AppLogger.error('WebSocket manager or ESP32 IP is null', tag: 'AUTO_RECONNECT');
       return false;
     }
 
-    AppLogger.info('🔄 Attempting to reconnect to $_esp32IP...', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Attempting to reconnect to $_esp32IP... (attempt ${_retryCount + 1}/${AutoReconnectConfig.maxRetry})', tag: 'AUTO_RECONNECT');
     _updateStatus(AutoReconnectStatus.reconnecting);
     _isReconnecting = true;
 
@@ -417,16 +459,28 @@ class WebSocketAutoReconnectService {
       final success = await _webSocketManager!.connectToESP32(_esp32IP!);
 
       if (success) {
-        // Success (will be confirmed by status listener)
-        AppLogger.info('✅ Reconnect attempt successful', tag: 'AUTO_RECONNECT');
-        return true;
+        // DO NOT reset state here! Let status listener handle it
+        // Status listener will call _onReconnectSuccess when it receives connected event
+        AppLogger.info('Reconnect initiated, waiting for status listener confirmation...', tag: 'AUTO_RECONNECT');
+
+        // Wait for status listener to confirm (with timeout)
+        await Future.delayed(const Duration(seconds: 3));
+
+        if (_isReconnecting) {
+          // Status listener didn't confirm, assume success anyway
+          AppLogger.warning('Status listener timeout, assuming success', tag: 'AUTO_RECONNECT');
+          _onReconnectSuccess();
+        }
+
+        return success;
       } else {
         // Failed
+        AppLogger.warning('Reconnect attempt failed (success=false)', tag: 'AUTO_RECONNECT');
         _onReconnectFailed();
         return false;
       }
     } catch (e) {
-      AppLogger.error('❌ Reconnect error: $e', tag: 'AUTO_RECONNECT');
+      AppLogger.error('Reconnect error: $e', tag: 'AUTO_RECONNECT');
       _onReconnectFailed();
       return false;
     }
@@ -434,19 +488,21 @@ class WebSocketAutoReconnectService {
 
   /// Handle reconnect success
   void _onReconnectSuccess() {
-    AppLogger.info('✅ Reconnect successful!', tag: 'AUTO_RECONNECT');
+    if (!_isReconnecting) return; // Already handled
+
+    AppLogger.info('Reconnect successful!', tag: 'AUTO_RECONNECT');
 
     // Reset state
     _retryCount = 0;
     _isReconnecting = false;
-    _retryTimer?.cancel();
-    _retryTimer = null;
+    _isReconnectScheduled = false;
 
-    // ⭐ NEW: Reset data validation counters
+    // Reset data validation counters
     _consecutiveEmptyDataCount = 0;
+    _consecutivePingTimeouts = 0;
     _lastValidDataTime = DateTime.now();
 
-    AppLogger.info('✅ Data validation counters reset', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Data validation counters reset', tag: 'AUTO_RECONNECT');
 
     _updateStatus(AutoReconnectStatus.connected);
 
@@ -456,13 +512,14 @@ class WebSocketAutoReconnectService {
 
   /// Handle reconnect failed
   void _onReconnectFailed() {
-    AppLogger.warning('⚠️ Reconnect failed', tag: 'AUTO_RECONNECT');
+    AppLogger.warning('Reconnect failed', tag: 'AUTO_RECONNECT');
 
     _isReconnecting = false;
+    _isReconnectScheduled = false;
     _retryCount++;
 
     // Schedule next retry
-    _scheduleRetry();
+    _scheduleReconnect();
   }
 
   /// Update reconnect status
@@ -470,18 +527,18 @@ class WebSocketAutoReconnectService {
     if (_currentStatus != status) {
       _currentStatus = status;
       _statusController.add(status);
-      AppLogger.debug('📊 Status updated: $status', tag: 'AUTO_RECONNECT');
+      AppLogger.debug('Status updated: $status', tag: 'AUTO_RECONNECT');
     }
   }
 
   // ==================== DISPOSE ====================
   void dispose() {
-    AppLogger.info('🗑️ Disposing auto-reconnect service', tag: 'AUTO_RECONNECT');
+    AppLogger.info('Disposing auto-reconnect service', tag: 'AUTO_RECONNECT');
 
     stopMonitoring();
 
     _statusController.close();
     _countdownController.close();
-    _dataValidationController.close(); // ⭐ NEW: Close data validation controller
+    _dataValidationController.close();
   }
 }

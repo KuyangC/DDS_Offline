@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../data/services/unified_fire_alarm_parser.dart';
@@ -19,10 +20,27 @@ class _TabMonitoringPageState extends State<TabMonitoringPage> {
   Map<int, String> _zoneNames = {};
   bool _isZoneNamesLoading = false;
 
+  // New alarm subscription for auto-opening zone detail dialog
+  StreamSubscription<int>? _newAlarmSubscription;
+
   @override
   void initState() {
     super.initState();
     _loadZoneNames();
+    _setupNewAlarmListener();
+  }
+
+  /// Setup listener for new alarm stream
+  void _setupNewAlarmListener() {
+    final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+
+    _newAlarmSubscription = fireAlarmData.newAlarmStream.listen((zoneNumber) {
+      if (mounted) {
+        AppLogger.info('Auto-opening zone detail dialog for Zone $zoneNumber', tag: 'AUTO_ALARM_DIALOG');
+        _showZoneDetailDialog(context, zoneNumber, fireAlarmData);
+      }
+    });
+    AppLogger.info('New alarm stream listener started', tag: 'AUTO_ALARM_DIALOG');
   }
 
   /// Load zone names from local storage
@@ -62,6 +80,13 @@ class _TabMonitoringPageState extends State<TabMonitoringPage> {
         );
       },
     );
+  }
+
+  @override
+  void dispose() {
+    _newAlarmSubscription?.cancel();
+    AppLogger.debug('New alarm subscription cancelled', tag: 'AUTO_ALARM_DIALOG');
+    super.dispose();
   }
 
   void _incrementModules() {

@@ -74,6 +74,9 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
   bool _isDisconnected = false;
   StreamSubscription? _autoRefreshStatusSubscription;
 
+  // New alarm subscription for auto-opening zone detail dialog
+  StreamSubscription<int>? _newAlarmSubscription;
+
   // Initialization flag for lifecycle management
   bool _isInitialized = false;
 
@@ -146,6 +149,15 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
     // Listen to activity logs changes
     fireAlarmData.addListener(_onActivityLogsChanged);
+
+    // Listen to new alarm stream for auto-opening zone detail dialog
+    _newAlarmSubscription = fireAlarmData.newAlarmStream.listen((zoneNumber) {
+      if (mounted && !_disposed) {
+        AppLogger.info('Auto-opening zone detail dialog for Zone $zoneNumber', tag: 'AUTO_ALARM_DIALOG');
+        _showZoneDetailDialog(context, zoneNumber, fireAlarmData);
+      }
+    });
+    AppLogger.info('New alarm stream listener started', tag: 'AUTO_ALARM_DIALOG');
 
     // ✅ FIXED: Delay WebSocket initialization until after first frame
     // This ensures GetIt services are fully registered before access
@@ -481,6 +493,10 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
     // 🔥 NEW: Cancel AutoRefreshService status subscription
     _autoRefreshStatusSubscription?.cancel();
+
+    // Cancel new alarm subscription
+    _newAlarmSubscription?.cancel();
+    AppLogger.debug('New alarm subscription cancelled', tag: 'AUTO_ALARM_DIALOG');
 
     // Stop activity log auto-save timer
     try {

@@ -82,6 +82,10 @@ class FireAlarmData extends ChangeNotifier {
   final Set<int> _accumulatedAlarmZones = {};
   final Set<int> _accumulatedTroubleZones = {};
 
+  // New alarm stream for auto-opening zone detail dialog
+  final StreamController<int> _newAlarmController = StreamController<int>.broadcast();
+  Stream<int> get newAlarmStream => _newAlarmController.stream;
+
   // Loading states
   bool _isInitiallyLoading = false;
   bool _isAccumulationMode = false;
@@ -126,6 +130,7 @@ class FireAlarmData extends ChangeNotifier {
   @override
   void dispose() {
     _mounted = false;
+    _newAlarmController.close();
     super.dispose();
   }
 
@@ -842,6 +847,12 @@ class FireAlarmData extends ChangeNotifier {
           zoneName: zoneName,
           type: 'alarm',
         );
+
+        // Trigger new alarm stream for auto-opening zone detail dialog
+        if (!_newAlarmController.isClosed) {
+          _newAlarmController.add(zoneNumber);
+          AppLogger.info('New alarm detected for Zone $zoneNumber - triggering auto-open dialog', tag: 'AUTO_ALARM_DIALOG');
+        }
       }
       _accumulatedAlarmZones.add(zoneNumber);
     } else if (unifiedZone.status == 'Trouble') {

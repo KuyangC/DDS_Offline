@@ -58,6 +58,9 @@ class WebSocketModeManager extends ChangeNotifier {
   bool get isFirebaseMode => !_isWebSocketMode;
   WebSocketAutoReconnectService get autoReconnectService => _autoReconnectService;
 
+  /// ⭐ NEW: Getter for FireAlarmData (read-only access)
+  FireAlarmData? get fireAlarmData => _fireAlarmData;
+
   /// Force reset to Firebase mode and reinitialize
   Future<void> forceResetToFirebaseMode() async {
     AppLogger.info('Force resetting to Firebase mode...', tag: 'WS_MODE_MANAGER');
