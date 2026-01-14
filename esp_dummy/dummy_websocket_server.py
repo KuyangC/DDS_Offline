@@ -1,33 +1,17 @@
 #!/usr/bin/env python3
 """
-Dummy WebSocket Server untuk Testing Fire Alarm Monitoring System
-Simulasi data dari 3 device ESP32 dengan format JSON
-
-Run dengan: python3 dummy_websocket_server.py
-
-IP WiFi otomatis didetect dari network interface
-
-Format Data JSON:
-{
-    "timestamp": 7,
-    "data": "41DF0370<STX>010000<STX>020400<STX>030000",
-    "clients": 1,
-    "freeHeap": 252412
-}
 """
 
 import asyncio
 import websockets
-import socket
 import json
-import threading
+import socket
 import sys
+import threading
 from datetime import datetime
 
-# Konfigurasi
 PORT = 81
 
-# 3 Device dengan 5 zona each
 DEVICES = [
     {'address': '01', 'name': 'Device 01 - Lantai 1', 'zones': ['Zona 1', 'Zona 2', 'Zona 3', 'Zona 4', 'Zona 5']},
     {'address': '02', 'name': 'Device 02 - Lantai 2', 'zones': ['Zona 6', 'Zona 7', 'Zona 8', 'Zona 9', 'Zona 10']},
@@ -38,6 +22,9 @@ clients = set()
 current_scenario = 0
 uptime_counter = 0
 scenario_changed = True
+trouble_rotation_index = 0
+last_trouble_rotation_time = 0
+trouble_rotation_active = False
 
 
 def get_wifi_ip():
@@ -48,114 +35,122 @@ def get_wifi_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
-        return 'localhost'
+    except:
+        return "127.0.0.1"
 
 
 def calculate_checksum(data):
-    """Calculate SUM-based checksum"""
+    """Calculate checksum sederhana (SUM-based)"""
     total = sum(ord(c) for c in data)
     return format(total, 'X').zfill(4)
 
 
-# Scenario definitions
-# (device_index, zone_index, alarm_bit, trouble_bit, description)
-# zone_index: 0-4 (5 zones per device), None = all normal
-# alarm_bit: hex value for the zone alarm bit
-# trouble_bit: hex value for the zone trouble bit
-SCENARIOS = [
-    # Normal - all devices normal
-    [
-        {'address': '01', 'alarm': '00', 'trouble': '00'},
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 1 - Zone 1 Alarm (bit 0 = 0x01)
-    [
-        {'address': '01', 'alarm': '01', 'trouble': '00'},  # Zone 1 Alarm
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 1 - Zone 2 Alarm (bit 1 = 0x02)
-    [
-        {'address': '01', 'alarm': '02', 'trouble': '00'},  # Zone 2 Alarm
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 1 - Zone 3 Alarm (bit 2 = 0x04)
-    [
-        {'address': '01', 'alarm': '04', 'trouble': '00'},  # Zone 3 Alarm
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 1 - Zone 4 Alarm (bit 3 = 0x08)
-    [
-        {'address': '01', 'alarm': '08', 'trouble': '00'},  # Zone 4 Alarm
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 1 - Zone 5 Alarm (bit 4 = 0x10)
-    [
-        {'address': '01', 'alarm': '10', 'trouble': '00'},  # Zone 5 Alarm
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 2 - Zone 1 Alarm
-    [
-        {'address': '01', 'alarm': '00', 'trouble': '00'},
-        {'address': '02', 'alarm': '01', 'trouble': '00'},  # Zone 6 Alarm
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 2 - Zone 2 Alarm
-    [
-        {'address': '01', 'alarm': '00', 'trouble': '00'},
-        {'address': '02', 'alarm': '02', 'trouble': '00'},  # Zone 7 Alarm
-        {'address': '03', 'alarm': '00', 'trouble': '00'},
-    ],
-    # Device 3 - Zone 1 Alarm
-    [
-        {'address': '01', 'alarm': '00', 'trouble': '00'},
-        {'address': '02', 'alarm': '00', 'trouble': '00'},
-        {'address': '03', 'alarm': '01', 'trouble': '00'},  # Zone 11 Alarm
-    ],
-    # Device 1 - Zone 1 Trouble (bit 0 = 0x01)
+# Trouble rotation scenarios (untuk Mode 2 - auto rotate setiap 30 detik)
+TROUBLE_SCENARIOS = [
+    # Trouble di Device 1 - Zone 1
     [
         {'address': '01', 'alarm': '00', 'trouble': '01'},  # Zone 1 Trouble
         {'address': '02', 'alarm': '00', 'trouble': '00'},
         {'address': '03', 'alarm': '00', 'trouble': '00'},
     ],
-    # Device 2 - Zone 3 Trouble (bit 2 = 0x04)
+    # Trouble di Device 1 - Zone 2 & 3
     [
-        {'address': '01', 'alarm': '00', 'trouble': '00'},
-        {'address': '02', 'alarm': '00', 'trouble': '04'},  # Zone 8 Trouble
+        {'address': '01', 'alarm': '00', 'trouble': '06'},  # Zone 2 & 3 Trouble (0x02 + 0x04 = 0x06)
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
         {'address': '03', 'alarm': '00', 'trouble': '00'},
     ],
+    # Trouble di Device 2 - Zone 1 & 2
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '03'},  # Zone 1 & 2 Trouble (0x01 + 0x02 = 0x03)
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Trouble di Device 2 - Zone 4 & 5
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '18'},  # Zone 4 & 5 Trouble (0x08 + 0x10 = 0x18)
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Trouble di Device 3 - Zone 2 & 4
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '0A'},  # Zone 2 & 4 Trouble (0x02 + 0x08 = 0x0A)
+    ],
+]
+
+# Alarm scenarios (untuk Mode 3)
+ALARM_SCENARIOS = [
+    # Device 1 - Zone 1 Alarm
+    [
+        {'address': '01', 'alarm': '01', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Device 1 - Zone 3 & 5 Alarm
+    [
+        {'address': '01', 'alarm': '14', 'trouble': '00'},  # Zone 3 & 5 Alarm (0x04 + 0x10 = 0x14)
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Device 2 - Zone 2 & 3 Alarm
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '06', 'trouble': '00'},  # Zone 2 & 3 Alarm (0x02 + 0x04 = 0x06)
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Device 3 - Zone 1 & 5 Alarm
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '11', 'trouble': '00'},  # Zone 1 & 5 Alarm (0x01 + 0x10 = 0x11)
+    ],
+    # Multi-device Alarm
+    [
+        {'address': '01', 'alarm': '05', 'trouble': '00'},  # Zone 1 & 3 Alarm
+        {'address': '02', 'alarm': '02', 'trouble': '00'},  # Zone 2 Alarm
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+]
+
+# Mode 1: Normal - semua devices OK
+MODE_NORMAL = [
+    {'address': '01', 'alarm': '00', 'trouble': '00'},
+    {'address': '02', 'alarm': '00', 'trouble': '00'},
+    {'address': '03', 'alarm': '00', 'trouble': '00'},
 ]
 
 
 def get_scenario_name(index):
     """Get scenario description"""
     names = [
-        "0: NORMAL - Semua zona OK",
-        "1: ALARM - Device 1, Zona 1 (Lantai 1)",
-        "2: ALARM - Device 1, Zona 2 (Lantai 1)",
-        "3: ALARM - Device 1, Zona 3 (Lantai 1)",
-        "4: ALARM - Device 1, Zona 4 (Lantai 1)",
-        "5: ALARM - Device 1, Zona 5 (Lantai 1)",
-        "6: ALARM - Device 2, Zona 1 (Lantai 2)",
-        "7: ALARM - Device 2, Zona 2 (Lantai 2)",
-        "8: ALARM - Device 3, Zona 1 (Lantai 3)",
-        "9: TROUBLE - Device 1, Zona 1",
-        "10: TROUBLE - Device 2, Zona 3",
+        "1: ONLINE/NORMAL - Semua devices OK (No Trouble, No Alarm)",
+        "2: TROUBLE - Auto rotate 2 zone trouble setiap 30 detik",
+        "3: ALARM - Beberapa zona dalam kondisi alarm",
+        "4: NO DATA/DISCONNECT - WebSocket berhenti mengirim data",
     ]
-    return names[index] if index < len(names) else f"Scenario {index}"
+    return names[index] if index < len(names) else f"Mode {index + 1}"
 
 
-def generate_zone_data(scenario_index):
+def generate_zone_data(mode_index):
     """Generate zone data sesuai format ESP32"""
     STX = '<STX>'
 
-    scenario = SCENARIOS[scenario_index]
+    # Mode 4: No Data - return empty string untuk disconnect simulation
+    if mode_index == 3:
+        return ''
+
+    # Mode 1: Normal
+    if mode_index == 0:
+        scenario = MODE_NORMAL
+    # Mode 2: Trouble - gunakan rotation index
+    elif mode_index == 1:
+        scenario = TROUBLE_SCENARIOS[trouble_rotation_index % len(TROUBLE_SCENARIOS)]
+    # Mode 3: Alarm - gunakan rotation index
+    elif mode_index == 2:
+        scenario = ALARM_SCENARIOS[trouble_rotation_index % len(ALARM_SCENARIOS)]
+    else:
+        scenario = MODE_NORMAL
 
     # Build device data
     device_data = ''
@@ -173,15 +168,19 @@ def generate_zone_data(scenario_index):
     return zone_packet
 
 
-def generate_json_message(scenario_index, uptime):
+def generate_json_message(mode_index, uptime):
     """Generate JSON message"""
-    zone_data = generate_zone_data(scenario_index)
+    zone_data = generate_zone_data(mode_index)
+
+    # Mode 4: No Data - return None
+    if mode_index == 3 or not zone_data:
+        return None
 
     message = {
         "timestamp": uptime,
         "data": zone_data,
         "clients": len(clients),
-        "freeHeap": 254412 - (scenario_index * 100)
+        "freeHeap": 254412 - (mode_index * 100)
     }
 
     return json.dumps(message)
@@ -189,20 +188,20 @@ def generate_json_message(scenario_index, uptime):
 
 def print_menu():
     """Print interactive menu"""
-    print('\n' + '=' * 60)
-    print('                    PILIH SCENARIO')
-    print('=' * 60)
-    for i in range(len(SCENARIOS)):
+    print('\n' + '=' * 70)
+    print('                        PILIH MODE')
+    print('=' * 70)
+    for i in range(4):
         print(f'  {get_scenario_name(i)}')
-    print('=' * 60)
-    print('  Ketik angka scenario lalu ENTER')
+    print('=' * 70)
+    print('  Ketik angka mode (1-4) lalu ENTER')
     print('  Ketik "q" atau "x" untuk keluar')
-    print('=' * 60)
+    print('=' * 70)
 
 
 def input_thread():
     """Thread for handling user input"""
-    global current_scenario, scenario_changed
+    global current_scenario, scenario_changed, trouble_rotation_index
 
     while True:
         print_menu()
@@ -215,12 +214,13 @@ def input_thread():
 
             try:
                 choice_int = int(choice)
-                if 0 <= choice_int < len(SCENARIOS):
-                    current_scenario = choice_int
+                if 1 <= choice_int <= 4:
+                    current_scenario = choice_int - 1  # Convert to 0-based index
                     scenario_changed = True
-                    print(f"\n✅ Scenario diubah ke: {get_scenario_name(choice_int)}")
+                    trouble_rotation_index = 0  # Reset rotation when mode changes
+                    print(f"\n✅ Mode diubah ke: {get_scenario_name(choice_int - 1)}")
                 else:
-                    print(f"\n❌ Pilihan tidak valid! Masukkan angka 0-{len(SCENARIOS)-1}")
+                    print(f"\n❌ Pilihan tidak valid! Masukkan angka 1-4")
             except ValueError:
                 print("\n❌ Input tidak valid! Masukkan angka.")
 
@@ -232,14 +232,14 @@ def input_thread():
 
 async def handle_client(websocket):
     """Handle client connection"""
-    client_addr = websocket.remote_address
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Client connected: {client_addr[0]}")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] New client connected from {websocket.remote_address}")
     clients.add(websocket)
 
     try:
         async for message in websocket:
+            # Handle incoming messages if needed
             pass
-    except Exception:
+    except websockets.exceptions.ConnectionClosed:
         pass
     finally:
         clients.discard(websocket)
@@ -249,25 +249,54 @@ async def handle_client(websocket):
 async def broadcast_data():
     """Broadcast data setiap 2 detik"""
     global current_scenario, uptime_counter, scenario_changed
+    global trouble_rotation_index, last_trouble_rotation_time, trouble_rotation_active
 
     last_scenario = -1
+    broadcast_count = 0
 
     while True:
         if clients:
             uptime_counter += 1
+            broadcast_count += 1
 
-            # Only print when scenario changes
-            if current_scenario != last_scenario:
-                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Mengirim: {get_scenario_name(current_scenario)}")
+            # Auto-rotate untuk Mode 2 (Trouble) dan Mode 3 (Alarm) setiap 30 detik
+            # 30 detik / 2 detik per broadcast = 15 broadcasts
+            if current_scenario in [1, 2]:  # Mode 2 atau 3
+                if broadcast_count % 15 == 0:  # Setiap 30 detik
+                    trouble_rotation_index += 1
+                    scenario_changed = True
+                    rotation_info = ""
+
+                    if current_scenario == 1:  # Trouble mode
+                        trouble_scenario = TROUBLE_SCENARIOS[trouble_rotation_index % len(TROUBLE_SCENARIOS)]
+                        rotation_info = f"Trouble rotation #{trouble_rotation_index + 1}"
+                    else:  # Alarm mode
+                        alarm_scenario = ALARM_SCENARIOS[trouble_rotation_index % len(ALARM_SCENARIOS)]
+                        rotation_info = f"Alarm rotation #{trouble_rotation_index + 1}"
+
+                    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🔄 {rotation_info}")
+
+            # Only print when scenario changes atau pada rotasi
+            if current_scenario != last_scenario or scenario_changed:
+                mode_desc = get_scenario_name(current_scenario)
+                if current_scenario in [1, 2] and trouble_rotation_index > 0:
+                    mode_desc += f" (Rotation #{trouble_rotation_index + 1})"
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Mengirim: {mode_desc}")
                 last_scenario = current_scenario
+                scenario_changed = False
 
-            json_message = generate_json_message(current_scenario, uptime_counter)
+            # Mode 4: No Data - skip sending
+            if current_scenario == 3:
+                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️  NO DATA MODE - Tidak mengirim data (testing auto-reconnect)")
+            else:
+                json_message = generate_json_message(current_scenario, uptime_counter)
 
-            for client in list(clients):
-                try:
-                    await client.send(json_message)
-                except:
-                    clients.remove(client)
+                if json_message:  # Only send if not None
+                    for client in list(clients):
+                        try:
+                            await client.send(json_message)
+                        except:
+                            clients.remove(client)
 
         await asyncio.sleep(2)
 
@@ -277,16 +306,18 @@ async def main():
 
     wifi_ip = get_wifi_ip()
 
-    print('\n' + '=' * 60)
-    print('          Dummy WebSocket Server - Interactive')
-    print('=' * 60)
+    print('\n' + '=' * 70)
+    print('        Dummy WebSocket Server - Fire Alarm Monitoring System')
+    print('=' * 70)
     print(f'  WiFi IP   : {wifi_ip}')
     print(f'  Port      : {PORT}')
     print(f'  WS URL    : ws://{wifi_ip}:{PORT}')
     print(f'  Devices   : {len(DEVICES)} (Address: 01, 02, 03)')
-    print('=' * 60)
+    print(f'  Zones     : 15 zones (5 zones per device)')
+    print('=' * 70)
     print(f'\n  Server berjalan. Menunggu koneksi client...')
-    print(f'  Gunakan aplikasi atau Postman untuk connect ke WebSocket\n')
+    print(f'  Gunakan aplikasi Flutter atau Postman untuk connect ke WebSocket')
+    print(f'  Pilih mode 1-4 untuk simulasi berbagai skenario\n')
 
     # Start input thread in background
     threading.Thread(target=input_thread, daemon=True).start()
@@ -299,4 +330,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        print("\n\nServer stopped.")
