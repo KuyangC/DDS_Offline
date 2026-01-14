@@ -86,27 +86,76 @@ class ZoneMappingService {
   }
 
   /// Get the file path for a specific zone's mapping image
+  /// Uses directory listing for robust file finding
   static Future<String?> getZoneMappingPath(int zoneNumber) async {
     try {
       final folderPath = await loadMappingFolderPath();
 
+      AppLogger.info('🔍 Looking for zone $zoneNumber in folder: "$folderPath"', tag: 'ZONE_MAPPING');
+
       if (folderPath.isEmpty) {
+        AppLogger.warning('❌ Folder path is empty!', tag: 'ZONE_MAPPING');
         return null;
       }
 
-      // Check for supported image extensions
-      for (final extension in _supportedExtensions) {
-        final imagePath = path.join(folderPath, '$zoneNumber$extension');
-        if (await File(imagePath).exists()) {
-          AppLogger.debug('Found zone mapping for zone $zoneNumber: $imagePath', tag: 'ZONE_MAPPING');
-          return imagePath;
+      // List all files in folder instead of constructing paths
+      final folder = Directory(folderPath);
+      if (!await folder.exists()) {
+        AppLogger.error('❌ Folder does not exist: "$folderPath"', tag: 'ZONE_MAPPING');
+        return null;
+      }
+
+      // Check if folder is accessible
+      try {
+        await folder.list().first;
+        AppLogger.debug('✅ Folder is accessible, listing files...', tag: 'ZONE_MAPPING');
+      } catch (e) {
+        AppLogger.error('❌ Folder is not accessible: $e', tag: 'ZONE_MAPPING');
+        return null;
+      }
+
+      final files = await folder.list().toList();
+      AppLogger.debug('📂 Found ${files.length} items in folder', tag: 'ZONE_MAPPING');
+
+      // Look for file matching zone number
+      final zoneNumberStr = zoneNumber.toString();
+
+      for (final file in files) {
+        if (file is File) {
+          final fileName = path.basenameWithoutExtension(file.path);
+          final extension = path.extension(file.path).toLowerCase();
+
+          // Check if filename matches zone number (case-sensitive)
+          if (fileName == zoneNumberStr && _supportedExtensions.contains(extension)) {
+            AppLogger.info('✅ FOUND zone mapping for zone $zoneNumber: "${file.path}"', tag: 'ZONE_MAPPING');
+            return file.path;
+          }
+
+          // Debug: Log why file didn't match
+          if (_supportedExtensions.contains(extension)) {
+            AppLogger.debug('⚠️  Skipping file: "$fileName" (not zone $zoneNumber)', tag: 'ZONE_MAPPING');
+          }
         }
       }
 
-      AppLogger.debug('No zone mapping found for zone $zoneNumber', tag: 'ZONE_MAPPING');
+      // Log what files actually exist for debugging
+      final imageFiles = files
+          .where((f) => f is File)
+          .map((f) => path.basename(f.path))
+          .take(10)
+          .toList();
+
+      if (imageFiles.isNotEmpty) {
+        AppLogger.warning('⚠️  No match for zone $zoneNumber. Found files: ${imageFiles.join(', ')}', tag: 'ZONE_MAPPING');
+      } else {
+        AppLogger.warning('⚠️  No image files found in folder', tag: 'ZONE_MAPPING');
+      }
+
+      AppLogger.warning('❌ No zone mapping found for zone $zoneNumber', tag: 'ZONE_MAPPING');
       return null;
     } catch (e) {
-      AppLogger.error('Error getting zone mapping path for zone $zoneNumber: $e', tag: 'ZONE_MAPPING');
+      AppLogger.error('❌ Error getting zone mapping path for zone $zoneNumber: $e', tag: 'ZONE_MAPPING');
+      AppLogger.error('Stack trace: ${StackTrace.current}', tag: 'ZONE_MAPPING');
       return null;
     }
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../datasources/websocket/fire_alarm_websocket_manager.dart';
 import '../datasources/local/websocket_settings_service.dart';
 import 'logger.dart';
+import 'websocket_auto_reconnect_service.dart';
 import '../../core/constants/app_constants.dart';
 import '../../presentation/providers/fire_alarm_data_provider.dart';
 
@@ -41,6 +42,9 @@ class WebSocketModeManager extends ChangeNotifier {
   // WebSocket Manager
   FireAlarmWebSocketManager? _webSocketManager;
 
+  // Auto-reconnect service
+  final WebSocketAutoReconnectService _autoReconnectService = WebSocketAutoReconnectService.instance;
+
   // FireAlarmData reference for cache invalidation
   FireAlarmData? _fireAlarmData;
 
@@ -52,6 +56,10 @@ class WebSocketModeManager extends ChangeNotifier {
   String get esp32IP => _esp32IP;
   String? get lastError => _lastError;
   bool get isFirebaseMode => !_isWebSocketMode;
+  WebSocketAutoReconnectService get autoReconnectService => _autoReconnectService;
+
+  /// ⭐ NEW: Getter for FireAlarmData (read-only access)
+  FireAlarmData? get fireAlarmData => _fireAlarmData;
 
   /// Force reset to Firebase mode and reinitialize
   Future<void> forceResetToFirebaseMode() async {
@@ -172,6 +180,10 @@ class WebSocketModeManager extends ChangeNotifier {
       _isConnecting = true;
       notifyListeners();
 
+      // 🛑 STOP AUTO-RECONNECT MONITORING
+      _autoReconnectService.stopMonitoring();
+      AppLogger.info('🛑 Auto-reconnect monitoring stopped', tag: 'WS_MODE_MANAGER');
+
       // Disconnect dari ESP32
       if (_webSocketManager != null) {
         await _webSocketManager!.disconnectFromESP32();
@@ -231,6 +243,15 @@ class WebSocketModeManager extends ChangeNotifier {
 
           // 🚀 FORCE CACHE INVALIDATION and PENDING DATA PROCESSING
           await _invalidateCacheAndProcessPending();
+
+          // 🔄 START AUTO-RECONNECT MONITORING
+          if (_webSocketManager != null) {
+            _autoReconnectService.startMonitoring(
+              webSocketManager: _webSocketManager!,
+              esp32IP: _esp32IP,
+            );
+            AppLogger.info('✅ Auto-reconnect monitoring started', tag: 'WS_MODE_MANAGER');
+          }
         } else {
           throw Exception('Failed to connect to ESP32');
         }
@@ -287,6 +308,9 @@ class WebSocketModeManager extends ChangeNotifier {
 
       AppLogger.info('Updating ESP32 IP from $_esp32IP to $newIP', tag: 'WS_MODE_MANAGER');
 
+      // 🛑 STOP AUTO-RECONNECT MONITORING
+      _autoReconnectService.stopMonitoring();
+
       // Disconnect dulu jika connected
       if (_isConnected && _webSocketManager != null) {
         await _webSocketManager!.disconnectFromESP32();
@@ -306,7 +330,16 @@ class WebSocketModeManager extends ChangeNotifier {
         final success = await _webSocketManager!.connectToESP32(_esp32IP);
         _isConnecting = false;
 
-        if (!success) {
+        if (success) {
+          _isConnected = true;
+
+          // 🔄 START AUTO-RECONNECT MONITORING WITH NEW IP
+          _autoReconnectService.startMonitoring(
+            webSocketManager: _webSocketManager!,
+            esp32IP: _esp32IP,
+          );
+          AppLogger.info('✅ Auto-reconnect monitoring restarted with new IP', tag: 'WS_MODE_MANAGER');
+        } else {
           _lastError = 'Failed to reconnect with new IP';
           notifyListeners();
           return false;
@@ -455,6 +488,10 @@ class WebSocketModeManager extends ChangeNotifier {
     AppLogger.info('Disposing WebSocket mode manager with cleanup sequence', tag: 'WS_MODE_MANAGER');
 
     try {
+      // 🛑 STOP AUTO-RECONNECT MONITORING
+      _autoReconnectService.stopMonitoring();
+      AppLogger.info('🛑 Auto-reconnect monitoring stopped in dispose', tag: 'WS_MODE_MANAGER');
+
       // Remove listener first to prevent callback issues during disposal
       _webSocketManager?.removeListener(_onWebSocketStatusChanged);
 

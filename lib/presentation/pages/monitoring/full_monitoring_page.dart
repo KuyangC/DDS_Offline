@@ -17,30 +17,12 @@ class FullMonitoringPage extends StatefulWidget {
 }
 
 class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBindingObserver {
-  // ==================== KONFIGURASI UKURAN ====================
-  // Button Configuration
-  static const double _buttonContainerHeightMultiplier = 0.08;  // 8% of screen width
-  static const double _buttonHeightMultiplier = 0.07;           // 7% of screen width
-  static const double _buttonFontMultiplier = 0.025;            // 2.5% of screen width
-  
-  // Button Size Limits
-  static const double _minButtonHeight = 35.0;
-  static const double _maxButtonHeight = 60.0;
-  static const double _minButtonFont = 8.0;
-  static const double _maxButtonFont = 14.0;
-  // ============================================================
-
-  // State untuk tracking button yang sedang ditekan
-  bool _isAcknowledgeActive = false;
-
   // State untuk zona yang dipilih
   int? _selectedZoneNumber;
 
   // State untuk visibility kontrol container
   bool _showProjectContainer = true;
   bool _showZonesContainer = true;
-  bool _showButtonsContainer = true;
-  bool _showLedStatusContainer = true;
   bool _showZoneNameContainer = true;
 
   // Local Audio Manager untuk independen audio control
@@ -385,44 +367,13 @@ class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBin
                               ),
                             const SizedBox(height: 10),
 
-                            // Status Indicators - LED Status
-                            if (_showLedStatusContainer)
-                              Consumer<FireAlarmData>(
-                                builder: (context, fireAlarmData, child) {
-                                  return Container(
-                                    width: double.infinity,
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: _getContainerPadding(context),
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: Colors.grey[300]!),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                      children: [
-                                        _buildStatusColumn('AC POWER', 'AC Power', fireAlarmData),
-                                        _buildStatusColumn('DC POWER', 'DC Power', fireAlarmData),
-                                        _buildStatusColumn('ALARM', 'Alarm', fireAlarmData),
-                                        _buildStatusColumn('TROUBLE', 'Trouble', fireAlarmData),
-                                        _buildStatusColumn('DRILL', 'Drill', fireAlarmData),
-                                        _buildStatusColumn('SILENCED', 'Silenced', fireAlarmData),
-                                        _buildStatusColumn('DISABLED', 'Disabled', fireAlarmData),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-
                             // Selected Zone Info Container
                             if (_showZoneNameContainer) ...[
                               const SizedBox(height: 10),
                               _buildSelectedZoneInfoContainer(fireAlarmData),
                             ],
 
-                            if (_showLedStatusContainer && _showZonesContainer)
+                            if (_showZonesContainer)
                               const SizedBox(height: 10),
 
                             // Zones container
@@ -439,15 +390,9 @@ class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBin
                                   child: _buildZonesGrid(fireAlarmData),
                                 ),
                               ),
-                            if (_showZonesContainer && _showButtonsContainer)
-                              const SizedBox(height: 6),
-
-                            // Control Buttons - Horizontal Layout
-                            if (_showButtonsContainer)
-                              _buildHorizontalControlButtons(fireAlarmData),
-                            if (_showButtonsContainer)
+                            if (_showZonesContainer)
                               const SizedBox(height: 10),
-                          
+
                             const SizedBox(height: 10),
                             // Visibility Controls at the bottom
                             _buildVisibilityControls(),
@@ -707,80 +652,6 @@ class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBin
     return baseSize.clamp(8.0, 15.0);
   }
 
-  // Metode untuk membangun status column dengan data terpusat
-  Widget _buildStatusColumn(String label, String statusKey, FireAlarmData fireAlarmData) {
-    // Use enhanced LED methods that integrate with LED decoder
-    bool isActive = fireAlarmData.getEnhancedLEDStatus(statusKey);
-    final activeColor = fireAlarmData.getEnhancedLEDColor(statusKey);
-    final inactiveColor = Colors.grey.withAlpha(128); // Fixed inactive color
-    final baseFontSize = _calculateResponsiveFontSize(context);
-
-    // 🎯 Enhanced trouble detection - Use Simple Status Manager with your exact 4 rules
-    if (statusKey == 'Trouble') {
-      isActive = fireAlarmData.getSimpleHasTroubleZones();
-    }
-
-    return Column(
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: baseFontSize * 0.8,
-            fontWeight: FontWeight.w500,
-            color: Colors.grey[700],
-          ),
-        ),
-        SizedBox(height: baseFontSize * 0.4),
-        Container(
-          width: 20,
-          height: 20,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isActive ? activeColor : inactiveColor,
-            border: Border.all(
-              color: isActive ? activeColor : inactiveColor,
-              width: 1,
-            ),
-            boxShadow: isActive
-                ? [
-                    BoxShadow(
-                      color: activeColor.withAlpha(102),
-                      spreadRadius: 1,
-                      blurRadius: 3,
-                    ),
-                  ]
-                : null,
-          ),
-        ),
-        // Add status text indicator when active
-        if (statusKey == 'Trouble' && isActive)
-          Padding(
-            padding: EdgeInsets.only(top: baseFontSize * 0.15),
-            child: Text(
-              'TROUBLE',
-              style: TextStyle(
-                fontSize: baseFontSize * 0.6,
-                fontWeight: FontWeight.bold,
-                color: Colors.orange,
-              ),
-            ),
-          ),
-        if (statusKey == 'Alarm' && isActive)
-          Padding(
-            padding: EdgeInsets.only(top: baseFontSize * 0.15),
-            child: Text(
-              'ALARM',
-              style: TextStyle(
-                fontSize: baseFontSize * 0.6,
-                fontWeight: FontWeight.bold,
-                color: Colors.red,
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
   // Build visibility controls for containers
   Widget _buildVisibilityControls() {
     return Container(
@@ -827,36 +698,6 @@ class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBin
               const Text('Zones'),
             ],
           ),
-          // Buttons Container Checkbox
-          Row(
-            children: [
-              Checkbox(
-                value: _showButtonsContainer,
-                onChanged: (bool? value) {
-                  setState(() {
-                    _showButtonsContainer = value ?? true;
-                  });
-                },
-                activeColor: const Color.fromARGB(255, 38, 152, 17),
-              ),
-              const Text('Buttons'),
-            ],
-          ),
-          // LED Status Container Checkbox
-          Row(
-            children: [
-              Checkbox(
-                value: _showLedStatusContainer,
-                onChanged: (bool? value) {
-                  setState(() {
-                    _showLedStatusContainer = value ?? true;
-                  });
-                },
-                activeColor: const Color.fromARGB(255, 38, 152, 17),
-              ),
-              const Text('LED Status'),
-            ],
-          ),
           // Zone Name Container Checkbox
           Row(
             children: [
@@ -877,144 +718,6 @@ class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBin
     );
   }
 
-  // Build horizontal control buttons
-  Widget _buildHorizontalControlButtons(FireAlarmData fireAlarmData) {
-    return Container(
-      width: double.infinity,
-      height: _getButtonContainerHeight(context),
-      padding: EdgeInsets.symmetric(
-        horizontal: _getContainerPadding(context),
-        vertical: 8,
-      ),
-      child: Row(
-        children: [
-          // System Reset Button
-          Expanded(
-            child: _buildControlButton(
-              'SYSTEM RESET',
-              Colors.red,
-              false, // isResetting removed - not available
-              _handleSystemReset,
-            ),
-          ),
-          SizedBox(width: _getButtonSpacing(context)),
-          // Drill Button
-          Expanded(
-            child: _buildControlButton(
-              'DRILL',
-              fireAlarmData.getSystemStatus('Drill') == 'active' ? Colors.red : Colors.blue,
-              fireAlarmData.getSystemStatus('Drill') == 'active',
-              _handleDrill,
-            ),
-          ),
-          SizedBox(width: _getButtonSpacing(context)),
-          // Acknowledge Button
-          Expanded(
-            child: _buildControlButton(
-              'ACKNOWLEDGE',
-              _isAcknowledgeActive ? Colors.orange : Colors.grey,
-              _isAcknowledgeActive,
-              _handleAcknowledge,
-            ),
-          ),
-          SizedBox(width: _getButtonSpacing(context)),
-          // Silence Button
-          Expanded(
-            child: _buildControlButton(
-              'SILENCE',
-              fireAlarmData.getSystemStatus('Silenced') == 'active' ? Colors.yellow[700]! : Colors.grey,
-              fireAlarmData.getSystemStatus('Silenced') == 'active',
-              _handleSilence,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Build individual control button
-  Widget _buildControlButton(
-    String label,
-    Color color,
-    bool isActive,
-    VoidCallback onPressed,
-  ) {
-    final buttonHeight = _getButtonHeight(context);
-    final buttonFontSize = _getButtonFontSize(context);
-    final buttonPadding = _getButtonPadding(context);
-    
-    return SizedBox(
-      height: buttonHeight,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: buttonPadding,
-        decoration: BoxDecoration(
-          color: isActive ? color.withValues(alpha: 0.15) : Colors.white,
-          border: Border.all(
-            color: isActive ? color : Colors.grey[400]!,
-            width: isActive ? 2.0 : 1.5,
-          ),
-          borderRadius: BorderRadius.circular(8),
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.3),
-                    spreadRadius: 1,
-                    blurRadius: 3,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.grey.withValues(alpha: 0.2),
-                    spreadRadius: 0,
-                    blurRadius: 1,
-                    offset: const Offset(0, 1),
-                  ),
-                ],
-        ),
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(8),
-          child: FittedBox(
-            fit: BoxFit.contain,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: buttonFontSize,
-                    fontWeight: FontWeight.bold,
-                    color: isActive ? color : Colors.black87,
-                    letterSpacing: 0.8,
-                  ),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (isActive)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      '● ACTIVE',
-                      style: TextStyle(
-                        fontSize: buttonFontSize * 0.6,
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-
   // Get responsive padding for main container
   EdgeInsets _getResponsivePadding(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -1031,88 +734,6 @@ class _FullMonitoringPageState extends State<FullMonitoringPage> with WidgetsBin
     return (screenWidth * 0.02).clamp(10.0, 20.0);
   }
 
-  // Get responsive button container height
-  double _getButtonContainerHeight(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    // Use configured button container height multiplier with limits
-    return (screenWidth * _buttonContainerHeightMultiplier).clamp(_minButtonHeight, _maxButtonHeight);
-  }
-
-  // Get responsive button height
-  double _getButtonHeight(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    // Use configured button height multiplier with limits
-    return (screenWidth * _buttonHeightMultiplier).clamp(_minButtonHeight, _maxButtonHeight);
-  }
-
-  // Get responsive button font size
-  double _getButtonFontSize(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    // Use configured button font multiplier with limits
-    return (screenWidth * _buttonFontMultiplier).clamp(_minButtonFont, _maxButtonFont);
-  }
-
-  // Get responsive button padding
-  EdgeInsets _getButtonPadding(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final horizontalPadding = (screenWidth * 0.02).clamp(6.0, 12.0);
-    final verticalPadding = (screenWidth * 0.015).clamp(4.0, 8.0);
-    return EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: verticalPadding);
-  }
-
-  // Get responsive button spacing
-  double _getButtonSpacing(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    // Button spacing: 2% of screen width, minimum 6px, maximum 12px
-    return (screenWidth * 0.02).clamp(6.0, 12.0);
-  }
-
-  // Handler untuk System Reset
-  void _handleSystemReset() async {
-    // Stop all audio immediately
-    _audioManager.stopAllAudioImmediately();
-    await bg_notification.BackgroundNotificationService().stopAlarm();
-
-    setState(() {
-      _isAcknowledgeActive = false;
-    });
-
-    // Use ButtonActionService untuk handle System Reset
-    if (mounted) {
-      await ButtonActionService().handleSystemReset(context: context);
-    }
-  }
-
-  // Handler untuk Drill
-  void _handleDrill() async {
-    // Use ButtonActionService untuk handle Drill
-    if (mounted) {
-      await ButtonActionService().handleDrill(context: context);
-    }
-  }
-
-  // Handler untuk Acknowledge
-  void _handleAcknowledge() async {
-    // Use ButtonActionService untuk handle Acknowledge
-    if (mounted) {
-      await ButtonActionService().handleAcknowledge(context: context, currentState: _isAcknowledgeActive);
-      
-      // Update local state
-      setState(() {
-        _isAcknowledgeActive = !_isAcknowledgeActive;
-      });
-    }
-  }
-
-  // Handler untuk Silence
-  void _handleSilence() async {
-    // Use ButtonActionService untuk handle Silence
-    if (mounted) {
-      await ButtonActionService().handleSilence(context: context);
-    }
-  }
-
-  
   // Initialize services
   Future<void> _initializeServices() async {
     try {

@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/services/logger.dart';
 import '../../../data/services/websocket_mode_manager.dart';
+import '../../../data/datasources/websocket/websocket_service.dart';
 import '../../../data/services/unified_ip_service.dart';
 import '../../../data/datasources/local/offline_settings_service.dart';
 import '../../../data/services/offline_performance_manager.dart';
@@ -25,7 +26,6 @@ import '../../../data/models/zone_status_model.dart';
 import '../../widgets/blinking_tab_header.dart';
 import '../../widgets/zone_detail_dialog.dart';
 import '../../widgets/exit_password_dialog.dart';
-import '../connection/offline_config_page.dart';
 import '../auth/login_page.dart';
 import '../../../main.dart';
 
@@ -70,12 +70,12 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
   // WebSocket manager removed - using global WebSocketModeManager instead
   // This prevents race conditions and multiple manager conflicts
 
-  // WebSocket state subscription for enhanced real-time updates
-  StreamSubscription? _webSocketStatusSubscription;
-
   // 🔥 NEW: Disconnect status untuk offline mode
   bool _isDisconnected = false;
   StreamSubscription? _autoRefreshStatusSubscription;
+
+  // New alarm subscription for auto-opening zone detail dialog
+  StreamSubscription<int>? _newAlarmSubscription;
 
   // Initialization flag for lifecycle management
   bool _isInitialized = false;
@@ -123,9 +123,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
     // Initialize tab section with sample data
     _initializeTabSection();
-
-    // 🔍 ENHANCED UI SYNC: Add WebSocket state listeners
-    _setupWebSocketStateListeners();
   }
 
   @override
@@ -153,6 +150,15 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // Listen to activity logs changes
     fireAlarmData.addListener(_onActivityLogsChanged);
 
+    // Listen to new alarm stream for auto-opening zone detail dialog
+    _newAlarmSubscription = fireAlarmData.newAlarmStream.listen((zoneNumber) {
+      if (mounted && !_disposed) {
+        AppLogger.info('Auto-opening zone detail dialog for Zone $zoneNumber', tag: 'AUTO_ALARM_DIALOG');
+        _showZoneDetailDialog(context, zoneNumber, fireAlarmData);
+      }
+    });
+    AppLogger.info('New alarm stream listener started', tag: 'AUTO_ALARM_DIALOG');
+
     // ✅ FIXED: Delay WebSocket initialization until after first frame
     // This ensures GetIt services are fully registered before access
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -160,6 +166,10 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         _initializeWebSocketMode();
       }
     });
+
+    // Start auto-save timer for activity logs
+    fireAlarmData.startActivityLogAutoSave();
+    AppLogger.info('Activity log auto-save timer started', tag: 'OFFLINE_MONITORING');
   }
 
   Future<void> _loadZoneNames() async {
@@ -475,14 +485,28 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // 🚀 Dispose performance manager
     _performanceManager.dispose();
 
-    // Dispose WebSocket manager using global instance
-    WebSocketModeManager.instance.dispose();
-
-    // 🔍 ENHANCED UI SYNC: Cancel WebSocket state subscription
-    _webSocketStatusSubscription?.cancel();
+    // 🔥 CRITICAL FIX: JANGAN dispose singleton WebSocketModeManager!
+    // Ini digunakan seluruh app, jika di-dispose akan mematikan WebSocket connection
+    // dan mencegah auto-reconnect bekerja.
+    // Hanya cancel subscriptions, jangan dispose manager itself.
+    // WebSocketModeManager.instance.dispose(); // ❌ REMOVED - Ini penyebab tidak bisa auto-reconnect
 
     // 🔥 NEW: Cancel AutoRefreshService status subscription
     _autoRefreshStatusSubscription?.cancel();
+
+    // Cancel new alarm subscription
+    _newAlarmSubscription?.cancel();
+    AppLogger.debug('New alarm subscription cancelled', tag: 'AUTO_ALARM_DIALOG');
+
+    // Stop activity log auto-save timer
+    try {
+      final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+      fireAlarmData.stopActivityLogAutoSave();
+      AppLogger.info('Activity log auto-save timer stopped', tag: 'OFFLINE_MONITORING');
+    } catch (e) {
+      // Provider might not be available during dispose
+      AppLogger.debug('Could not stop auto-save timer: $e', tag: 'OFFLINE_MONITORING');
+    }
 
     // Cancel auto-hide timer to prevent memory leaks
     _hideControlsTimer?.cancel();
@@ -505,76 +529,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         _displayModules--;
       }
     });
-  }
-
-  /// 🔍 ENHANCED UI SYNC: Setup WebSocket state listeners for real-time updates
-  void _setupWebSocketStateListeners() {
-    try {
-      AppLogger.info('🚀 INITIALIZING WebSocket state listeners', tag: 'UI_SYNC');
-
-      // Store reference to context for safe access in callbacks
-      final currentContext = context;
-
-      // Alternative approach: Use periodic timer to check WebSocket status
-      // and listen to FireAlarmData changes for zone updates
-      _webSocketStatusSubscription = Stream.periodic(Duration(seconds: 2), (_) {
-        // Check WebSocket connection status through FireAlarmData
-        try {
-          // Multiple safety checks to prevent Provider access after disposal
-          if (_disposed || !currentContext.mounted) {
-            return -1; // Signal to stop stream
-          }
-
-          final fireAlarmData = Provider.of<FireAlarmData>(currentContext, listen: false);
-          final isConnected = fireAlarmData.isWebSocketConnected ? 1 : 0;
-          AppLogger.info('🔗 WebSocket status check: ${isConnected == 1}', tag: 'UI_SYNC');
-          return isConnected;
-        } catch (e) {
-          // Silently handle Provider access errors - don't log as warnings to reduce noise
-          return -1; // Signal error or disposal
-        }
-      }).where((status) => status >= 0).listen((isConnected) {
-        if (!_disposed && mounted && isConnected >= 0) {
-          // Trigger UI refresh if connection status changes
-          setState(() {});
-        }
-      });
-
-      // 🔥 NEW: Listen to AutoRefreshService untuk disconnect status (OFFLINE MODE)
-      try {
-        final autoRefreshService = AutoRefreshService.instance;
-
-        // Listen to status changes
-        _autoRefreshStatusSubscription = autoRefreshService.statusStream.listen((status) {
-          if (_disposed || !mounted) return;
-
-          // 🔥 FIX: Disconnect berdasarkan DATA, bukan AutoRefreshService
-          final wasDisconnected = _isDisconnected;
-
-          // Check apakah ada data yang valid
-          final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
-          final hasData = fireAlarmData.hasValidZoneData;
-
-          // Jika ada data zone, berarti CONNECTED
-          final isNowDisconnected = !hasData;
-
-          if (wasDisconnected != isNowDisconnected) {
-            setState(() {
-              _isDisconnected = isNowDisconnected;
-            });
-            print('🔌 Disconnect status changed: $_isDisconnected (hasValidZoneData=$hasData)');
-          }
-        });
-
-        AppLogger.info('✅ AutoRefreshService disconnect listener initialized', tag: 'UI_SYNC');
-      } catch (e) {
-        AppLogger.error('❌ Error setting up AutoRefreshService listener: $e', tag: 'UI_SYNC');
-      }
-
-      AppLogger.info('✅ WebSocket state listeners initialized', tag: 'UI_SYNC');
-    } catch (e) {
-      AppLogger.error('❌ Error setting up WebSocket listeners: $e', tag: 'UI_SYNC');
-    }
   }
 
   /// Auto-hide controls timer methods
@@ -1736,13 +1690,46 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
       itemCount: dateLogs.length,
       itemBuilder: (context, index) {
         final log = dateLogs[index];
+        final logType = log['type'] as String?;
+
+        // Tentukan warna border berdasarkan type
+        Color borderColor;
+        double borderWidth;
+
+        switch (logType) {
+          case 'alarm':
+          case 'DISCONNECT_WARNING':
+            borderColor = Colors.red.shade400; // Merah untuk alarm/warning
+            borderWidth = 2.0;
+            break;
+          case 'trouble':
+            borderColor = Colors.orange.shade400; // Kuning/oranye untuk trouble
+            borderWidth = 2.0;
+            break;
+          case 'normal':
+          case 'RECONNECTED':
+            borderColor = Colors.green.shade400; // Hijau untuk normal/reconnect
+            borderWidth = 2.0;
+            break;
+          case 'connection':
+            borderColor = Colors.blue.shade400; // Biru untuk connection info
+            borderWidth = 1.5;
+            break;
+          default:
+            borderColor = Colors.grey.shade200; // Default grey
+            borderWidth = 1.0;
+        }
+
         return Container(
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(
+              color: borderColor,
+              width: borderWidth,
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.grey.withValues(alpha: 0.03),

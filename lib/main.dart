@@ -13,6 +13,7 @@ import 'data/datasources/local/exit_password_service.dart';
 import 'data/datasources/local/zone_mapping_service.dart';
 import 'data/services/websocket_mode_manager.dart';
 import 'data/services/auto_refresh_service.dart';
+import 'data/services/activity_log_repository.dart';
 import 'presentation/pages/connection/connection_config_page.dart';
 
 // GetIt service locator
@@ -71,6 +72,11 @@ Future<void> _initializeServices() async {
 
   // Initialize Auto Refresh Service
   getIt.registerSingleton<AutoRefreshService>(AutoRefreshService.instance);
+
+  // Initialize Activity Log Repository
+  final activityLogRepo = ActivityLogRepository();
+  await activityLogRepo.init();
+  getIt.registerSingleton<ActivityLogRepository>(activityLogRepo);
 
   // Initialize Fire Alarm Data
   final fireAlarmData = FireAlarmData();

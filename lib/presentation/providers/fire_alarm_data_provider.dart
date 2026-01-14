@@ -8,6 +8,7 @@ import '../../data/datasources/local/zone_name_local_storage.dart';
 import '../../data/services/logger.dart';
 import '../../data/services/websocket_mode_manager.dart';
 import '../../data/services/unified_fire_alarm_parser.dart';
+import '../../data/services/activity_log_repository.dart';
 import '../../data/models/zone_status_model.dart';
 
 /// Offline Fire Alarm Data Manager
@@ -39,6 +40,7 @@ class FireAlarmData extends ChangeNotifier {
   late final ZoneNameLocalStorage _zoneNameStorage;
   late final EnhancedZoneParser _zoneParser;
   late final WebSocketModeManager _wsModeManager;
+  late final ActivityLogRepository _activityLogRepository;
 
   // Zone data storage
   final Map<int, ZoneStatus> _zoneStatus = {};
@@ -79,6 +81,10 @@ class FireAlarmData extends ChangeNotifier {
   // Zone accumulation for alarms/troubles
   final Set<int> _accumulatedAlarmZones = {};
   final Set<int> _accumulatedTroubleZones = {};
+
+  // New alarm stream for auto-opening zone detail dialog
+  final StreamController<int> _newAlarmController = StreamController<int>.broadcast();
+  Stream<int> get newAlarmStream => _newAlarmController.stream;
 
   // Loading states
   bool _isInitiallyLoading = false;
@@ -124,6 +130,7 @@ class FireAlarmData extends ChangeNotifier {
   @override
   void dispose() {
     _mounted = false;
+    _newAlarmController.close();
     super.dispose();
   }
 
@@ -134,11 +141,35 @@ class FireAlarmData extends ChangeNotifier {
       _zoneNameStorage = GetIt.instance<ZoneNameLocalStorage>();
       _zoneParser = GetIt.instance<EnhancedZoneParser>();
       _wsModeManager = GetIt.instance<WebSocketModeManager>();
+      _activityLogRepository = GetIt.instance<ActivityLogRepository>();
+
+      // Load existing logs from database
+      await _loadLogsFromDatabase();
 
       AppLogger.info('✅ FireAlarmData initialized successfully');
     } catch (e) {
       AppLogger.error('❌ Error initializing FireAlarmData', error: e);
       rethrow;
+    }
+  }
+
+  /// Load existing logs from database
+  Future<void> _loadLogsFromDatabase() async {
+    try {
+      if (!_activityLogRepository.isInitialized) {
+        AppLogger.warning('ActivityLogRepository not initialized, skipping log load', tag: 'FIRE_ALARM_DATA');
+        return;
+      }
+
+      final dbLogs = await _activityLogRepository.getAllLogs();
+
+      if (dbLogs.isNotEmpty) {
+        activityLogs.clear();
+        activityLogs.addAll(dbLogs);
+        AppLogger.info('Loaded ${dbLogs.length} logs from database', tag: 'FIRE_ALARM_DATA');
+      }
+    } catch (e) {
+      AppLogger.error('Error loading logs from database', tag: 'FIRE_ALARM_DATA', error: e);
     }
   }
 
@@ -440,6 +471,7 @@ class FireAlarmData extends ChangeNotifier {
 
   /// Add activity log entry
   /// This method adds a new activity log entry with timestamp and maintains max log limit
+  /// Also saves to database for persistent storage
   void addActivityLog(String activity, {String? zoneName, String? type}) {
     final now = DateTime.now();
     final dateStr = DateFormat('yyyy-MM-dd').format(now);
@@ -462,8 +494,22 @@ class FireAlarmData extends ChangeNotifier {
       activityLogs.removeLast();
     }
 
+    // Save to database asynchronously (non-blocking)
+    _saveLogToDatabase(logEntry);
+
     AppLogger.debug('Activity log added: $activity', tag: 'ACTIVITY_LOG');
     notifyListeners();
+  }
+
+  /// Save log to database asynchronously
+  Future<void> _saveLogToDatabase(Map<String, dynamic> log) async {
+    try {
+      if (_activityLogRepository.isInitialized) {
+        await _activityLogRepository.saveLog(log);
+      }
+    } catch (e) {
+      AppLogger.error('Failed to save log to database', tag: 'ACTIVITY_LOG', error: e);
+    }
   }
 
   /// Clear activity logs
@@ -472,6 +518,44 @@ class FireAlarmData extends ChangeNotifier {
     _loggedAlarmZones.clear();
     _loggedTroubleZones.clear();
     notifyListeners();
+  }
+
+  /// Start auto-save timer (periodically saves logs to database)
+  void startActivityLogAutoSave() {
+    if (_activityLogRepository.isInitialized) {
+      _activityLogRepository.startAutoSave(() => activityLogs);
+      AppLogger.info('Activity log auto-save timer started', tag: 'FIRE_ALARM_DATA');
+    }
+  }
+
+  /// Stop auto-save timer
+  void stopActivityLogAutoSave() {
+    _activityLogRepository.stopAutoSave();
+    AppLogger.info('Activity log auto-save timer stopped', tag: 'FIRE_ALARM_DATA');
+  }
+
+  /// Manually save all current logs to database
+  Future<void> saveAllLogsToDatabase() async {
+    try {
+      if (_activityLogRepository.isInitialized) {
+        await _activityLogRepository.saveLogs(activityLogs);
+        AppLogger.info('Saved ${activityLogs.length} logs to database', tag: 'FIRE_ALARM_DATA');
+      }
+    } catch (e) {
+      AppLogger.error('Failed to save all logs to database', tag: 'FIRE_ALARM_DATA', error: e);
+    }
+  }
+
+  /// Clear database logs
+  Future<void> clearDatabaseLogs() async {
+    try {
+      if (_activityLogRepository.isInitialized) {
+        await _activityLogRepository.clearAllLogs();
+        AppLogger.info('Database logs cleared', tag: 'FIRE_ALARM_DATA');
+      }
+    } catch (e) {
+      AppLogger.error('Failed to clear database logs', tag: 'FIRE_ALARM_DATA', error: e);
+    }
   }
 
   /// Get modules list (placeholder for compatibility)
@@ -587,6 +671,38 @@ class FireAlarmData extends ChangeNotifier {
   void clearPendingWebSocketData() {
     _pendingWebSocketData.clear();
     AppLogger.info('Pending WebSocket data cleared', tag: 'FIRE_ALARM_DATA');
+  }
+
+  /// 🔥 Force process pending WebSocket data after reconnect
+  Future<void> forceProcessPendingData() async {
+    try {
+      AppLogger.info('🔄 Force processing pending WebSocket data', tag: 'FIRE_ALARM_DATA');
+
+      // Process pending data with force processing
+      if (_pendingWebSocketData.isNotEmpty) {
+        final pendingData = List<String>.from(_pendingWebSocketData);
+        _pendingWebSocketData.clear();
+
+        AppLogger.info('Processing ${pendingData.length} pending data items', tag: 'FIRE_ALARM_DATA');
+
+        for (final data in pendingData) {
+          try {
+            await processWebSocketData(data, forceProcess: true);
+          } catch (e) {
+            AppLogger.warning('⚠️ Error force processing pending data: $e', tag: 'FIRE_ALARM_DATA');
+          }
+        }
+      } else {
+        AppLogger.info('No pending data to process', tag: 'FIRE_ALARM_DATA');
+      }
+
+      // Force UI refresh
+      notifyListeners();
+      AppLogger.info('✅ Force data processing complete', tag: 'FIRE_ALARM_DATA');
+
+    } catch (e, stackTrace) {
+      AppLogger.error('❌ Error during force processing', tag: 'FIRE_ALARM_DATA', error: e, stackTrace: stackTrace);
+    }
   }
 
   /// Helper method untuk convert status string ke ZoneType
@@ -731,6 +847,12 @@ class FireAlarmData extends ChangeNotifier {
           zoneName: zoneName,
           type: 'alarm',
         );
+
+        // Trigger new alarm stream for auto-opening zone detail dialog
+        if (!_newAlarmController.isClosed) {
+          _newAlarmController.add(zoneNumber);
+          AppLogger.info('New alarm detected for Zone $zoneNumber - triggering auto-open dialog', tag: 'AUTO_ALARM_DIALOG');
+        }
       }
       _accumulatedAlarmZones.add(zoneNumber);
     } else if (unifiedZone.status == 'Trouble') {

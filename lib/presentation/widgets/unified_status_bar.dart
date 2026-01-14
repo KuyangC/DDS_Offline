@@ -107,7 +107,7 @@ class UnifiedStatusBar extends StatelessWidget {
   /// Build System Status Section
   Widget _buildSystemStatus(BuildContext context, FireAlarmData fireAlarmData) {
     final fontSize = _calculateResponsiveFontSize(context);
-    
+
     // Determine status using enhanced detection
     String statusText;
     Color statusColor;
@@ -117,9 +117,15 @@ class UnifiedStatusBar extends StatelessWidget {
     final hasAlarms = fireAlarmData.getAlarmZones().isNotEmpty;
     final hasTroubles = fireAlarmData.getTroubleZones().isNotEmpty;
 
+    // ⭐ NEW: Priority-based status detection
     if (hasAlarms) {
       statusText = 'ALARM';
       statusColor = Colors.red;
+      textColor = Colors.white;
+    } else if (!fireAlarmData.isWebSocketConnected) {
+      // ⭐ NEW: Check if WebSocket is disconnected (ESP offline/mati)
+      statusText = 'DISCONNECTED';
+      statusColor = Colors.red[700]!; // Dark red for disconnect
       textColor = Colors.white;
     } else if (hasTroubles) {
       statusText = 'SYSTEM TROUBLE';
