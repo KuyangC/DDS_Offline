@@ -59,9 +59,6 @@ class FireAlarmData extends ChangeNotifier {
   // Pending WebSocket data (buffer)
   final List<String> _pendingWebSocketData = [];
 
-  // Bell tracking per device
-  final Map<int, bool> _bellConfirmationStatus = {};
-
   // Project information
   String projectName = _defaultProjectName;
   String panelType = _defaultPanelType;
@@ -191,11 +188,6 @@ class FireAlarmData extends ChangeNotifier {
   /// Get active trouble zones
   List<ZoneStatus> getTroubleZones() {
     return _zoneStatus.values.where((zone) => zone.hasTrouble).toList();
-  }
-
-  /// Check if device has active bell
-  bool hasActiveBell(int deviceAddress) {
-    return _bellConfirmationStatus[deviceAddress] ?? false;
   }
 
   /// Check if zone is accumulated alarm
@@ -567,7 +559,6 @@ class FireAlarmData extends ChangeNotifier {
   /// Reset state
   void reset() {
     _zoneStatus.clear();
-    _bellConfirmationStatus.clear();
     _accumulatedAlarmZones.clear();
     _accumulatedTroubleZones.clear();
     _loggedAlarmZones.clear();
@@ -800,9 +791,12 @@ class FireAlarmData extends ChangeNotifier {
       zoneCount++;
     }
 
-    print('✅ Updated $zoneCount zone statuses');
-    print('📊 Total zones in _zoneStatus: ${_zoneStatus.length}');
-    print('📊 hasValidZoneData: ${_zoneStatus.isNotEmpty}');
+    // FIX: Setelah semua zona diperbarui, berikan data ke BellManager
+    _bellManager.processZoneData(_zoneStatus);
+
+    print('Updated $zoneCount zone statuses');
+    print('Total zones in _zoneStatus: ${_zoneStatus.length}');
+    print('hasValidZoneData: ${_zoneStatus.isNotEmpty}');
     print('═══════════════════════════════════════');
   }
 
@@ -825,10 +819,6 @@ class FireAlarmData extends ChangeNotifier {
   /// Update bell and accumulation tracking for a zone
   void _updateZoneTracking(dynamic unifiedZone) {
     final zoneNumber = unifiedZone.zoneNumber;
-    final deviceAddrInt = int.tryParse(unifiedZone.deviceAddress) ?? 1;
-
-    // Update bell status
-    _bellConfirmationStatus[deviceAddrInt] = unifiedZone.hasBellActive;
 
     // Track accumulated zones and log new alarms/troubles
     if (unifiedZone.status == 'Alarm') {

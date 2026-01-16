@@ -113,6 +113,49 @@ ALARM_SCENARIOS = [
     ],
 ]
 
+# Mode 4: Pre-Alarm scenarios
+PRE_ALARM_SCENARIOS = [
+    # Device 1 - Zone 3 Pre-Alarm
+    [
+        {'address': '01', 'alarm': '04', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Device 2 - Zone 5 Pre-Alarm
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '10', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+]
+
+# Mode 5: Alarm with Bell ON scenarios
+ALARM_WITH_BELL_SCENARIOS = [
+    # Device 1 - Zone 1 Alarm with Bell
+    [
+        {'address': '01', 'alarm': '21', 'trouble': '00'}, # 0x20 (bell) + 0x01 (zone 1)
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+    # Device 3 - Zone 4 Alarm with Bell
+    [
+        {'address': '01', 'alarm': '00', 'trouble': '00'},
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '28', 'trouble': '00'}, # 0x20 (bell) + 0x08 (zone 4)
+    ],
+]
+
+# Mode 6: Alarm Silenced scenarios
+ALARM_SILENCED_SCENARIOS = [
+    # Device 1 - Zone 1 Alarm, but silenced
+    [
+        {'address': '01', 'alarm': '01', 'trouble': '00'}, # No 0x20 bit
+        {'address': '02', 'alarm': '00', 'trouble': '00'},
+        {'address': '03', 'alarm': '00', 'trouble': '00'},
+    ],
+]
+
+
 # Mode 1: Normal - semua devices OK
 MODE_NORMAL = [
     {'address': '01', 'alarm': '00', 'trouble': '00'},
@@ -124,10 +167,13 @@ MODE_NORMAL = [
 def get_scenario_name(index):
     """Get scenario description"""
     names = [
-        "1: ONLINE/NORMAL - Semua devices OK (No Trouble, No Alarm)",
-        "2: TROUBLE - Auto rotate 2 zone trouble setiap 30 detik",
-        "3: ALARM - Beberapa zona dalam kondisi alarm",
-        "4: NO DATA/DISCONNECT - WebSocket berhenti mengirim data",
+        "1: ONLINE/NORMAL - Semua devices OK",            # index 0
+        "2: TROUBLE - Auto rotate zone trouble setiap 30 detik", # index 1
+        "3: ALARM - Auto rotate zona alarm (tanpa bell)", # index 2
+        "4: NO DATA/DISCONNECT - WebSocket berhenti mengirim data", # index 3 (moved from 6)
+        "5: PRE-ALARM - Satu zona pre-alarm (tanpa bell)", # index 4 (moved from 3)
+        "6: ALARM + BELL ON - Zona alarm DENGAN bell (0x20) dan konfirmasi $85", # index 5 (moved from 4)
+        "7: ALARM SILENCED - Zona alarm aktif TAPI bell silent (dengan konfirmasi $84)", # index 6 (moved from 5)
     ]
     return names[index] if index < len(names) else f"Mode {index + 1}"
 
@@ -135,32 +181,47 @@ def get_scenario_name(index):
 def generate_zone_data(mode_index):
     """Generate zone data sesuai format ESP32"""
     STX = '<STX>'
+    scenario = None
 
-    # Mode 4: No Data - return empty string untuk disconnect simulation
+    # Mode 4: No Data
     if mode_index == 3:
         return ''
 
-    # Mode 1: Normal
-    if mode_index == 0:
+    # Select the correct scenario based on mode
+    if mode_index == 0:     # Mode 1: Normal
         scenario = MODE_NORMAL
-    # Mode 2: Trouble - gunakan rotation index
-    elif mode_index == 1:
+    elif mode_index == 1:   # Mode 2: Trouble
         scenario = TROUBLE_SCENARIOS[trouble_rotation_index % len(TROUBLE_SCENARIOS)]
-    # Mode 3: Alarm - gunakan rotation index
-    elif mode_index == 2:
+    elif mode_index == 2:   # Mode 3: Alarm (no bell)
         scenario = ALARM_SCENARIOS[trouble_rotation_index % len(ALARM_SCENARIOS)]
+    elif mode_index == 4:   # Mode 5: Pre-Alarm
+        scenario = PRE_ALARM_SCENARIOS[trouble_rotation_index % len(PRE_ALARM_SCENARIOS)]
+    elif mode_index == 5:   # Mode 6: Alarm with Bell
+        scenario = ALARM_WITH_BELL_SCENARIOS[trouble_rotation_index % len(ALARM_WITH_BELL_SCENARIOS)]
+    elif mode_index == 6:   # Mode 7: Alarm Silenced
+        scenario = ALARM_SILENCED_SCENARIOS[trouble_rotation_index % len(ALARM_SILENCED_SCENARIOS)]
     else:
         scenario = MODE_NORMAL
 
-    # Build device data
+    # Build device data string by iterating through the scenario
     device_data = ''
-    for i, device in enumerate(scenario):
+    for device in scenario:
         address = device['address']
         alarm = device['alarm']
         trouble = device['trouble']
+
+        # Append the core device data
         device_data += f'{STX}{address}{trouble}{alarm}'
 
-    # Calculate checksum
+        # NEW LOGIC: Append confirmation code immediately after the triggering device
+        # Check if this device is the one with the alarm condition
+        if alarm != '00':
+            if mode_index == 5:  # Mode 6: ALARM + BELL ON
+                device_data += f'{STX}$85'
+            elif mode_index == 6:  # Mode 7: ALARM SILENCED
+                device_data += f'{STX}$84'
+
+    # Calculate checksum on the final, complete data string
     checksum = calculate_checksum(device_data)
 
     # Full packet
@@ -173,7 +234,7 @@ def generate_json_message(mode_index, uptime):
     zone_data = generate_zone_data(mode_index)
 
     # Mode 4: No Data - return None
-    if mode_index == 3 or not zone_data:
+    if mode_index == 3 or not zone_data: # Now index 3
         return None
 
     message = {
@@ -191,10 +252,10 @@ def print_menu():
     print('\n' + '=' * 70)
     print('                        PILIH MODE')
     print('=' * 70)
-    for i in range(4):
+    for i in range(7):
         print(f'  {get_scenario_name(i)}')
     print('=' * 70)
-    print('  Ketik angka mode (1-4) lalu ENTER')
+    print('  Ketik angka mode (1-7) lalu ENTER')
     print('  Ketik "q" atau "x" untuk keluar')
     print('=' * 70)
 
@@ -214,15 +275,15 @@ def input_thread():
 
             try:
                 choice_int = int(choice)
-                if 1 <= choice_int <= 4:
+                if 1 <= choice_int <= 7:
                     current_scenario = choice_int - 1  # Convert to 0-based index
                     scenario_changed = True
                     trouble_rotation_index = 0  # Reset rotation when mode changes
-                    print(f"\n✅ Mode diubah ke: {get_scenario_name(choice_int - 1)}")
+                    print(f"\nMode diubah ke: {get_scenario_name(choice_int - 1)}")
                 else:
-                    print(f"\n❌ Pilihan tidak valid! Masukkan angka 1-4")
+                    print(f"\nPilihan tidak valid! Masukkan angka 1-7")
             except ValueError:
-                print("\n❌ Input tidak valid! Masukkan angka.")
+                print("\nInput tidak valid! Masukkan angka.")
 
         except EOFError:
             break
