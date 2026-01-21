@@ -346,6 +346,19 @@ class FireAlarmData extends ChangeNotifier {
     return troubleZones;
   }
 
+  /// Get active pre-alarm zone numbers
+  List<int> get activePreAlarmZones {
+    return _zoneStatus.values
+        .where((zone) => zone.statusText == 'Pre-Alarm')
+        .map((zone) => zone.globalZoneNumber)
+        .toList();
+  }
+
+  /// Check if there are any pre-alarm zones
+  bool get hasPreAlarmZones {
+    return _zoneStatus.values.any((zone) => zone.statusText == 'Pre-Alarm');
+  }
+
   /// Get system status for UI
   String getSystemStatus(String statusType) {
     switch (statusType) {
@@ -845,6 +858,20 @@ class FireAlarmData extends ChangeNotifier {
         }
       }
       _accumulatedAlarmZones.add(zoneNumber);
+    } else if (unifiedZone.status == 'Pre-Alarm') {
+      // Only log if this is a new pre-alarm (not previously logged as alarm or trouble)
+      if (!_loggedAlarmZones.contains(zoneNumber) && !_loggedTroubleZones.contains(zoneNumber)) {
+        _loggedAlarmZones.add(zoneNumber); // Track as logged for pre-alarm
+        final zoneName = unifiedZone.description.isNotEmpty
+            ? unifiedZone.description
+            : 'Zone $zoneNumber';
+        addActivityLog(
+          '$zoneName - Pre-Alarm condition detected',
+          zoneName: zoneName,
+          type: 'pre_alarm',
+        );
+      }
+      _accumulatedAlarmZones.add(zoneNumber); // Treat pre-alarm as accumulated alarm
     } else if (unifiedZone.status == 'Trouble') {
       // Only log if this is a new trouble (not previously logged and not an alarm)
       if (!_loggedTroubleZones.contains(zoneNumber) && !_loggedAlarmZones.contains(zoneNumber)) {

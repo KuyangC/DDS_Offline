@@ -1215,9 +1215,11 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
   /// Helper: Get system status text based on zone states
   String _getSystemStatusText(FireAlarmData fireAlarmData) {
-    // Cek berdasarkan active zones
     if (fireAlarmData.activeAlarmZones.isNotEmpty) {
       return 'ALARM';
+    }
+    if (fireAlarmData.hasPreAlarmZones) { // Menggunakan getter baru
+      return 'PRE-ALARM';
     }
     if (fireAlarmData.activeTroubleZones.isNotEmpty) {
       return 'TROUBLE';
@@ -1231,8 +1233,8 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     if (fireAlarmData.activeAlarmZones.isNotEmpty) {
       return Colors.red;  // ALARM = Merah
     }
-    if (fireAlarmData.activeTroubleZones.isNotEmpty) {
-      return Colors.yellow.shade700;  // TROUBLE = KUNING
+    if (fireAlarmData.hasPreAlarmZones || fireAlarmData.activeTroubleZones.isNotEmpty) { // Menggunakan getter baru
+      return Colors.orange; // PRE-ALARM atau TROUBLE = Oranye
     }
     return Colors.green;  // NORMAL = Hijau
   }
@@ -1252,17 +1254,12 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         // 🔥 CRITICAL FIX: Bungkus dengan Consumer supaya rebuild saat FireAlarmData berubah
         return SizedBox(
           width: moduleWidth,
-          child: Consumer<FireAlarmData>(
-            builder: (context, fireAlarmData, child) {
-              return IndividualModuleContainer(
-                key: ValueKey('module_$moduleNumber'), // Tambah key untuk memastikan rebuild
-                moduleNumber: moduleNumber,
-                fireAlarmData: fireAlarmData,
-                zoneNames: _zoneNames,
-                onZoneTap: (zoneNumber) => _showZoneDetailDialog(context, zoneNumber, fireAlarmData),
-                onModuleTap: (moduleNumber) => _showModuleDetailDialog(context, moduleNumber, fireAlarmData),
-              );
-            },
+          child: IndividualModuleContainer(
+            key: ValueKey('module_$moduleNumber'), // Tambah key untuk memastikan rebuild
+            moduleNumber: moduleNumber,
+            zoneNames: _zoneNames,
+            onZoneTap: (zoneNumber) => _showZoneDetailDialog(context, zoneNumber, fireAlarmData),
+            onModuleTap: (moduleNumber) => _showModuleDetailDialog(context, moduleNumber, fireAlarmData),
           ),
         );
       }),
@@ -2328,7 +2325,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 // Individual Module Container - Container untuk setiap module (same as tab_monitoring.dart)
 class IndividualModuleContainer extends StatefulWidget {
   final int moduleNumber;
-  final FireAlarmData fireAlarmData;
   final Map<int, String> zoneNames;
   final Function(int)? onZoneTap;
   final Function(int)? onModuleTap;
@@ -2336,7 +2332,6 @@ class IndividualModuleContainer extends StatefulWidget {
   const IndividualModuleContainer({
     super.key,
     required this.moduleNumber,
-    required this.fireAlarmData,
     required this.zoneNames,
     this.onZoneTap,
     this.onModuleTap,
@@ -2347,6 +2342,37 @@ class IndividualModuleContainer extends StatefulWidget {
 }
 
 class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
+  late FireAlarmData _fireAlarmData;
+
+  @override
+  void initState() {
+    super.initState();
+    _fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+    _fireAlarmData.addListener(_onFireAlarmDataChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final newFireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+    if (_fireAlarmData != newFireAlarmData) {
+      _fireAlarmData.removeListener(_onFireAlarmDataChanged);
+      _fireAlarmData = newFireAlarmData;
+      _fireAlarmData.addListener(_onFireAlarmDataChanged);
+    }
+  }
+
+  void _onFireAlarmDataChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  void dispose() {
+    _fireAlarmData.removeListener(_onFireAlarmDataChanged);
+    super.dispose();
+  }
   // Cache zone colors to detect changes and avoid unnecessary rebuilds
   late Map<int, Color> _lastZoneColors;
 
@@ -2411,15 +2437,23 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // Module number
-          Text(
-            '#${widget.moduleNumber.toString().padLeft(2, '0')}',
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
-            textAlign: TextAlign.center,
-          ),
+                  Text(
+                    'MODULE ${widget.moduleNumber.toString().padLeft(2, '0')}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  // 🔥 NEW: Status keseluruhan modul
+                  Text(
+                    _getModuleOverallStatusText(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: _getModuleOverallStatusColor(),
+                    ),
+                  ),
           const SizedBox(height: 12),
 
           // 🎯 HORIZONTAL LAYOUT: Container untuk 6 LEDs dalam 1 baris dengan responsive spacing
@@ -2523,51 +2557,20 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
     );
   }
 
-  // Get zone color based on complete system status
   Color _getZoneColorFromSystem(int zoneNumber) {
-    // 🔥 FIX: Direct check dari activeAlarmZones dan activeTroubleZones
-    final alarmZones = widget.fireAlarmData.activeAlarmZones;
-    final troubleZones = widget.fireAlarmData.activeTroubleZones;
+    final zone = _fireAlarmData.getZoneStatus(zoneNumber); // <-- Menggunakan _fireAlarmData
 
-    // Cek langsung dari list (paling cepat dan akurat)
-    if (alarmZones.contains(zoneNumber)) {
-      return Colors.red;  // ALARM = MERAH
+    if (zone == null || zone.statusText == 'Offline') {
+      return Colors.grey.shade300; // OFFLINE
     }
-    if (troubleZones.contains(zoneNumber)) {
-      return Colors.yellow.shade700;  // TROUBLE = KUNING
+    if (zone.statusText == 'Alarm') {
+      return Colors.red;
     }
-
-    // Check accumulation mode
-    if (widget.fireAlarmData.isAccumulationMode) {
-      if (widget.fireAlarmData.isZoneAccumulatedAlarm(zoneNumber)) {
-        return Colors.red;
-      }
-      if (widget.fireAlarmData.isZoneAccumulatedTrouble(zoneNumber)) {
-        return Colors.yellow.shade700;
-      }
+    if (zone.statusText == 'Pre-Alarm' || zone.statusText == 'Trouble') {
+      return Colors.orange;
     }
 
-    // Check individual zone status
-    final zoneStatus = widget.fireAlarmData.getIndividualZoneStatus(zoneNumber);
-    if (zoneStatus != null) {
-      final status = zoneStatus['status'] as String?;
-
-      // Cek OFFLINE status dulu sebelum cek alarm/trouble
-      if (zoneStatus['isOffline'] == true || status == 'Offline') {
-        return Colors.grey.shade300;  // OFFLINE = Abu-abu
-      }
-
-      if (status == 'Alarm') return Colors.red;
-      if (status == 'Trouble') return Colors.yellow.shade700;
-    }
-
-    // Jika tidak ada data zone sama sekali → OFFLINE
-    if (zoneStatus == null) {
-      return Colors.grey.shade300;  // NO DATA = Abu-abu (Offline)
-    }
-
-    // Default: NORMAL/ACTIVE = HIJAU (hanya jika ada data dan tidak offline)
-    return Colors.green;
+    return Colors.green; // Normal
   }
 }
 

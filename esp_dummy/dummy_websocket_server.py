@@ -115,9 +115,9 @@ ALARM_SCENARIOS = [
 
 # Mode 4: Pre-Alarm scenarios
 PRE_ALARM_SCENARIOS = [
-    # Device 1 - Zone 3 Pre-Alarm
+    # Device 1 - Zone 3 Pre-Alarm (0x10 + 0x04 = 0x14)
     [
-        {'address': '01', 'alarm': '04', 'trouble': '00'},
+        {'address': '01', 'alarm': '14', 'trouble': '00'},
         {'address': '02', 'alarm': '00', 'trouble': '00'},
         {'address': '03', 'alarm': '00', 'trouble': '00'},
     ],

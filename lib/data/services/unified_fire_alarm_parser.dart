@@ -210,52 +210,89 @@ class EnhancedZoneParsingStrategy implements ParsingStrategy {
     final List<UnifiedZoneStatus> zones = [];
     if (deviceData.length < 2) return zones;
 
-    final statusData = deviceData.substring(2);
-    if (statusData.length < 4) { // Assumes offline if no trouble/alarm bytes
+    final statusDataSegment = deviceData.substring(2); // Get "BBCC" part
+    
+    if (statusDataSegment.length < 4) { // If trouble/alarm bytes are missing, treat as offline
         for (int i = 1; i <= zonesPerDevice; i++) {
-            zones.add(_createZoneStatus(deviceNumber, i, deviceAddress, 'Offline', 0, 0, deviceData));
+            final globalZoneNumber = (deviceNumber - 1) * zonesPerDevice + i;
+            zones.add(UnifiedZoneStatus(
+                zoneNumber: globalZoneNumber,
+                status: 'Offline',
+                description: 'Zone $i - Offline',
+                color: Colors.grey.shade300,
+                deviceAddress: deviceAddress,
+                deviceNumber: deviceNumber,
+                zoneInDevice: i,
+                timestamp: DateTime.now(),
+                isOffline: true,
+                hasPower: false,
+            ));
         }
         return zones;
     }
     
-    final troubleValue = int.parse(statusData.substring(0, 2), radix: 16);
-    final alarmValue = int.parse(statusData.substring(2, 4), radix: 16);
+    final troubleValue = int.parse(statusDataSegment.substring(0, 2), radix: 16);
+    final alarmValue = int.parse(statusDataSegment.substring(2, 4), radix: 16);
 
     for (int i = 1; i <= zonesPerDevice; i++) {
-      zones.add(_createZoneStatus(deviceNumber, i, deviceAddress, statusData, troubleValue, alarmValue, deviceData));
+      final zoneResult = _mapZoneStatusFromBytes(troubleValue, alarmValue, i - 1); // Pass 0-indexed zone
+      final globalZoneNumber = (deviceNumber - 1) * zonesPerDevice + i;
+      zones.add(UnifiedZoneStatus(
+          zoneNumber: globalZoneNumber,
+          status: zoneResult['status'],
+          description: zoneResult['description'],
+          color: zoneResult['color'],
+          deviceAddress: deviceAddress,
+          deviceNumber: deviceNumber,
+          zoneInDevice: i,
+          timestamp: DateTime.now(),
+          isOffline: zoneResult['isOffline'] ?? false,
+          hasPower: zoneResult['hasPower'] ?? true,
+          hasBellActive: zoneResult['hasBell'] ?? false,
+          rawData: deviceData,
+      ));
     }
     return zones;
   }
 
-  UnifiedZoneStatus _createZoneStatus(int deviceNumber, int zoneInDevice, String deviceAddress, String statusData, int troubleValue, int alarmValue, String rawDeviceData) {
-      final int bitPosition = zoneInDevice - 1;
-      final bool hasAlarm = (alarmValue & (1 << bitPosition)) != 0;
-      final bool hasTrouble = (troubleValue & (1 << bitPosition)) != 0;
-      final bool hasBellActive = (alarmValue & 0x20) != 0;
-      
-      String status = 'Normal';
-      Color color = Colors.white;
+  /// Map zone status from separate trouble and alarm bytes (6-char module format)
+  Map<String, dynamic> _mapZoneStatusFromBytes(int troubleValue, int alarmValue, int zoneIndex) {
+    String status = 'Normal';
+    String description = 'Zone ${zoneIndex + 1} - Normal';
+    Color color = Colors.white;
 
-      if(hasAlarm) {
-          status = 'Alarm';
-          color = Colors.red;
-      } else if (hasTrouble) {
-          status = 'Trouble';
-          color = Colors.orange;
-      }
+    final int bitPosition = zoneIndex; // Zone 0 = bit 0, Zone 1 = bit 1, etc.
+    bool hasZoneAlarmBit = (alarmValue & (1 << bitPosition)) != 0; // Zone-specific alarm bit
+    bool hasZoneTroubleBit = (troubleValue & (1 << bitPosition)) != 0; // Zone-specific trouble bit
 
-      return UnifiedZoneStatus(
-        zoneNumber: (deviceNumber - 1) * zonesPerDevice + zoneInDevice,
-        status: status,
-        description: 'Zone $zoneInDevice',
-        color: color,
-        deviceAddress: deviceAddress,
-        deviceNumber: deviceNumber,
-        zoneInDevice: zoneInDevice,
-        timestamp: DateTime.now(),
-        hasBellActive: hasBellActive,
-        rawData: rawDeviceData,
-      );
+    // Determine if the module-wide alarm condition is Pre-Alarm or Full Alarm based on the ALARM BYTE
+    bool isPreAlarmCondition = (alarmValue >= 0x10 && alarmValue < 0x20); // 0x1X - e.g., 0x11, 0x14
+    bool isFullAlarmCondition = (alarmValue >= 0x20); // 0x2X or higher - e.g., 0x21, 0x24, 0x3F
+
+    if (hasZoneAlarmBit) { // If this specific zone's alarm bit is set
+        if (isFullAlarmCondition) {
+            status = 'Alarm';
+            description = 'Zone ${zoneIndex + 1} - ALARM';
+            color = Colors.red;
+        } else if (isPreAlarmCondition) {
+            status = 'Pre-Alarm';
+            description = 'Zone ${zoneIndex + 1} - PRE-ALARM';
+            color = Colors.orange; // As per user request, color Pre-Alarm like Trouble
+        }
+    } else if (hasZoneTroubleBit) { // If this specific zone's trouble bit is set
+        status = 'Trouble';
+        description = 'Zone ${zoneIndex + 1} - TROUBLE';
+        color = Colors.orange;
+    }
+
+    return {
+      'status': status,
+      'description': description,
+      'color': color,
+      'isOffline': false, 
+      'hasPower': true,   
+      'hasBell': (alarmValue & 0x20) != 0, // This is the module-wide bell flag.
+    };
   }
 
   String _determineSystemContext(int alarmZones, int troubleZones, int connectedDevices) {
