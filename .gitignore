@@ -1,0 +1,18 @@
+# Miscellaneous
+.DS_Store
+.env
+.idea/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.dart_tool/
+build/
+coverage/
+*.iml
+*.lock.json
+*.freezed.dart
+*.g.dart
+*.gr.dart
+test_driver/
+.flutter-pin
+esp_dummy/nul
