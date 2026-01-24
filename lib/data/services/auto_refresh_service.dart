@@ -457,7 +457,16 @@ class AutoRefreshService {
         // Emit disconnect status untuk UI
         _emitStatus(AutoRefreshStatus.disconnected);
 
-        // 🔥 NEW: Add warning to Recent Status di FireAlarmData
+        // 🔥 NEW: Add user-friendly log for data timeout
+        if (_fireAlarmData != null && _fireAlarmData!.isMounted) {
+          _fireAlarmData!.addActivityLog(
+            'Host no Data Communication - Please Check Systems Settings',
+            type: 'warning',
+          );
+          AppLogger.warning('No data from host, user notified via activity log', tag: 'DATA_TIMEOUT');
+        }
+
+        // 🔥 NEW: Add warning to Recent Status di FireAlarmData (backward compatibility)
         _addDisconnectWarningToRecentStatus(timeSinceLastData);
 
         // 🔥 NEW: Schedule hot reload setelah 30 detik
