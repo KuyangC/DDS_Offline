@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../providers/fire_alarm_data_provider.dart';
@@ -6,20 +7,37 @@ import '../../data/datasources/local/zone_mapping_service.dart';
 import '../../data/datasources/local/zone_name_local_storage.dart';
 import '../../data/services/logger.dart';
 import '../../data/models/zone_status_model.dart';
+import '../services/alarm_queue_manager.dart';
 
 /// Shared Zone Detail Dialog Widget
 /// Used by both offline monitoring and tab monitoring pages
+/// Supports both single-zone mode and multi-alarm queue mode with navigation
 class ZoneDetailDialog extends StatefulWidget {
-  final int zoneNumber;
+  // Single-zone mode (legacy support)
+  final int? zoneNumber;
+  
+  // Multi-alarm queue mode (new)
+  final List<int>? alarmQueue;
+  final int? initialIndex;
+  final VoidCallback? onClose;
+  
+  // Common parameters
   final FireAlarmData fireAlarmData;
   final Map<int, String> zoneNames;
 
   const ZoneDetailDialog({
     super.key,
-    required this.zoneNumber,
+    this.zoneNumber,  // For single-zone mode
+    this.alarmQueue,  // For multi-alarm queue mode
+    this.initialIndex = 0,
+    this.onClose,
     required this.fireAlarmData,
     required this.zoneNames,
-  });
+  }) : assert(
+         (zoneNumber != null && alarmQueue == null) || 
+         (zoneNumber == null && alarmQueue != null),
+         'Either zoneNumber or alarmQueue must be provided, but not both'
+       );
 
   @override
   State<ZoneDetailDialog> createState() => _ZoneDetailDialogState();
@@ -28,33 +46,135 @@ class ZoneDetailDialog extends StatefulWidget {
 class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
   String? _zoneMappingImagePath;
   bool _isLoadingImage = false;
+  
+  // Multi-alarm queue management
+  late int _currentIndex;
+  late List<int> _currentQueue;
+  StreamSubscription<List<int>>? _queueSubscription;
+  
+  // Computed properties
+  int get currentZoneNumber {
+    // Single-zone mode
+    if (widget.zoneNumber != null) return widget.zoneNumber!;
+    
+    // Multi-alarm queue mode
+    if (_currentQueue.isEmpty) return 1; // Default fallback
+    return _currentQueue[_currentIndex];
+  }
+  
+  int get totalAlarms => _currentQueue.length;
+  bool get hasPrevious => _currentIndex > 0;
+  bool get hasNext => _currentIndex < _currentQueue.length - 1;
+  bool get isMultiAlarmMode => widget.alarmQueue != null;
 
   @override
   void initState() {
     super.initState();
+    
+    // Initialize queue state
+    if (widget.alarmQueue != null) {
+      // Multi-alarm mode
+      _currentIndex = widget.initialIndex ?? 0;
+      _currentQueue = List.from(widget.alarmQueue!);
+      
+      // Listen to queue updates (new alarms added while dialog open)
+      _queueSubscription = AlarmQueueManager().queueStream.listen((updatedQueue) {
+        if (mounted && updatedQueue.isNotEmpty) {
+          setState(() {
+            // Preserve current zone if still in queue
+            final currentZone = currentZoneNumber;
+            _currentQueue = List.from(updatedQueue);
+            
+            // Update index to current zone's new position
+            final newIndex = _currentQueue.indexOf(currentZone);
+            if (newIndex >= 0) {
+              _currentIndex = newIndex;
+            } else if (_currentIndex >= _currentQueue.length) {
+              // Current zone removed from queue, go to last
+              _currentIndex = _currentQueue.length - 1;
+            }
+          });
+          // Reload image for potentially new zone
+          _loadZoneMappingImage();
+        }
+      });
+    } else {
+      // Single-zone mode
+      _currentIndex = 0;
+      _currentQueue = [widget.zoneNumber!];
+    }
+    
+    // 🔥 NEW: Listen to FireAlarmData changes for real-time zone status updates
+    // This ensures dialog updates immediately when zone status changes (Alarm → Normal)
+    widget.fireAlarmData.addListener(_onFireAlarmDataChanged);
+    
     _loadZoneMappingImage();
   }
+  
+  /// Callback when FireAlarmData changes (zone status updates)
+  void _onFireAlarmDataChanged() {
+    if (mounted) {
+      setState(() {
+        // Rebuild dialog to reflect latest zone status
+        // This triggers real-time updates when zone changes from Alarm → Normal
+      });
+      AppLogger.debug('Dialog rebuilt due to zone status change (Zone $currentZoneNumber)', tag: 'ZONE_DETAIL');
+    }
+  }
+  
+  @override
+  void dispose() {
+    _queueSubscription?.cancel();
+    widget.fireAlarmData.removeListener(_onFireAlarmDataChanged);
+    super.dispose();
+  }
 
-  /// Load zone mapping image for this zone
+  /// Load zone mapping image for current zone
   Future<void> _loadZoneMappingImage() async {
     setState(() => _isLoadingImage = true);
 
     try {
-      final imagePath = await ZoneMappingService.getZoneMappingPath(widget.zoneNumber);
-      setState(() {
-        _zoneMappingImagePath = imagePath;
-        _isLoadingImage = false;
-      });
+      final imagePath = await ZoneMappingService.getZoneMappingPath(currentZoneNumber);
+      if (mounted) {
+        setState(() {
+          _zoneMappingImagePath = imagePath;
+          _isLoadingImage = false;
+        });
+      }
     } catch (e) {
-      AppLogger.error('Error loading zone mapping image for zone ${widget.zoneNumber}: $e', tag: 'ZONE_DETAIL');
-      setState(() => _isLoadingImage = false);
+      AppLogger.error('Error loading zone mapping image for zone $currentZoneNumber: $e', tag: 'ZONE_DETAIL');
+      if (mounted) {
+        setState(() => _isLoadingImage = false);
+      }
+    }
+  }
+  
+  /// Navigate to previous alarm in queue
+  void _goToPrevious() {
+    if (hasPrevious) {
+      setState(() {
+        _currentIndex--;
+      });
+      _loadZoneMappingImage();
+      AppLogger.info('Navigated to previous alarm: Zone $currentZoneNumber ($_currentIndex + 1 of $totalAlarms)', tag: 'ALARM_NAV');
+    }
+  }
+  
+  /// Navigate to next alarm in queue
+  void _goToNext() {
+    if (hasNext) {
+      setState(() {
+        _currentIndex++;
+      });
+      _loadZoneMappingImage();
+      AppLogger.info('Navigated to next alarm: Zone $currentZoneNumber (${_currentIndex + 1} of $totalAlarms)', tag: 'ALARM_NAV');
     }
   }
 
   @override
   Widget build(BuildContext context) {
     // Get zone status for header
-    final zoneStatus = widget.fireAlarmData.getIndividualZoneStatus(widget.zoneNumber);
+    final zoneStatus = widget.fireAlarmData.getIndividualZoneStatus(currentZoneNumber);
 
     // Local variables for zone status display
     String statusText;
@@ -124,10 +244,10 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
     }
 
     // Get custom zone name
-    final customZoneName = widget.zoneNames[widget.zoneNumber] ?? ZoneNameLocalStorage.getDefaultZoneName(widget.zoneNumber);
+    final customZoneName = widget.zoneNames[currentZoneNumber] ?? ZoneNameLocalStorage.getDefaultZoneName(currentZoneNumber);
 
     // Debug: Log what's being displayed
-    AppLogger.debug('ZoneDetailDialog - Zone ${widget.zoneNumber}: "$customZoneName" (custom: ${widget.zoneNames[widget.zoneNumber] ?? "none"})', tag: 'ZONE_DETAIL_DIALOG');
+    AppLogger.debug('ZoneDetailDialog - Zone $currentZoneNumber: "$customZoneName" (custom: ${widget.zoneNames[currentZoneNumber] ?? "none"})', tag: 'ZONE_DETAIL_DIALOG');
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -141,7 +261,7 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
+              color: Colors.black.withOpacity(0.25),
               blurRadius: 20,
               offset: const Offset(0, 10),
             ),
@@ -155,14 +275,14 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
               width: double.infinity,
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.1),
+                color: statusColor.withOpacity(0.1),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
                 ),
                 border: Border(
                   bottom: BorderSide(
-                    color: statusColor.withValues(alpha: 0.3),
+                    color: statusColor.withOpacity(0.3),
                     width: 2,
                   ),
                 ),
@@ -186,13 +306,48 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Zone #${widget.zoneNumber}',
+                    'Zone #$currentZoneNumber',
                     style: TextStyle(
                       fontSize: 14,
                       color: Colors.grey[600],
                       fontWeight: FontWeight.w500,
                     ),
                   ),
+                  // Multi-alarm position indicator
+                  if (isMultiAlarmMode && totalAlarms > 1) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: statusColor.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: statusColor.withOpacity(0.5),
+                          width: 2,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            color: statusColor,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'ALARM ${_currentIndex + 1} of $totalAlarms',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: statusColor,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -262,7 +417,7 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
                                             borderRadius: BorderRadius.circular(12),
                                           ),
                                           child: Text(
-                                            'Zone ${widget.zoneNumber}',
+                                            'Zone $currentZoneNumber',
                                             style: const TextStyle(
                                               color: Colors.white,
                                               fontSize: 12,
@@ -301,7 +456,7 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
-                                    'No mapping image configured for Zone ${widget.zoneNumber}\n'
+                                    'No mapping image configured for Zone $currentZoneNumber\n'
                                     'Configure mapping folder in Offline Config',
                                     style: TextStyle(
                                       color: Colors.grey[600],
@@ -352,7 +507,7 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
               ),
             ),
 
-            // Footer with close button
+            // Footer with navigation buttons (multi-alarm) or close button (single-zone)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -369,24 +524,91 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
                   ),
                 ),
               ),
-              child: ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: statusColor,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 48),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                child: const Text(
-                  'Close',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+              child: isMultiAlarmMode && totalAlarms > 1
+                  ? Row(
+                      children: [
+                        // Previous button
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: hasPrevious ? _goToPrevious : null,
+                            icon: const Icon(Icons.arrow_back, size: 18),
+                            label: const Text('Previous'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: hasPrevious ? Colors.blue.shade600 : Colors.grey.shade400,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size(0, 48),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              elevation: hasPrevious ? 2 : 0,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        // Close button
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              widget.onClose?.call();
+                              Navigator.of(context).pop();
+                            },
+                            icon: const Icon(Icons.close, size: 18),
+                            label: const Text('Close'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: statusColor,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size(0, 48),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              elevation: 2,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        // Next button
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: hasNext ? _goToNext : null,
+                            icon: const Icon(Icons.arrow_forward, size: 18),
+                            label: const Text('Next'),
+                            iconAlignment: IconAlignment.end,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: hasNext ? Colors.blue.shade600 : Colors.grey.shade400,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size(0, 48),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              elevation: hasNext ? 2 : 0,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : ElevatedButton(
+                      onPressed: () {
+                        widget.onClose?.call();
+                        Navigator.of(context).pop();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: statusColor,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 48),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: const Text(
+                        'Close',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -537,7 +759,7 @@ class _ZoneDetailDialogState extends State<ZoneDetailDialog> {
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
-                    'Zone ${widget.zoneNumber}',
+                    'Zone $currentZoneNumber',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
@@ -28,6 +29,7 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
   bool _isConfiguringMapping = false;
   bool _isScanning = false;
   List<DiscoveryResult> _discoveredDevices = [];
+  DateTime? _lastScanTime;
 
   // Design System - Flat Modern Theme
   static const Color _primary = Color(0xFF16A34A);      // Green 600
@@ -52,6 +54,7 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
   void initState() {
     super.initState();
     _loadSavedConfiguration();
+    _loadCachedScanResults();
   }
 
   @override
@@ -498,7 +501,7 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: IconButton(
-        onPressed: _isScanning ? null : _startNetworkScan,
+        onPressed: _isScanning ? null : _onScanButtonPressed,
         icon: _isScanning
             ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _primary))
             : Icon(Icons.wifi_find, color: _primary),
@@ -605,7 +608,85 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
     );
   }
 
-  // Network Discovery
+  // Network Discovery - Cache Management
+  
+  /// Load cached scan results from SharedPreferences
+  Future<void> _loadCachedScanResults() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedJson = prefs.getString('cached_scan_results');
+      final timestamp = prefs.getInt('last_scan_timestamp');
+      
+      if (cachedJson != null && cachedJson.isNotEmpty) {
+        final List<dynamic> decoded = jsonDecode(cachedJson);
+        setState(() {
+          _discoveredDevices = decoded.map((json) => _discoveryResultFromJson(json)).toList();
+          if (timestamp != null) {
+            _lastScanTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+          }
+        });
+        AppLogger.info('Loaded ${_discoveredDevices.length} cached scan results');
+      }
+    } catch (e) {
+      AppLogger.error('Failed to load cached scan results', error: e);
+    }
+  }
+  
+  /// Save scan results to SharedPreferences
+  Future<void> _saveScanResults(List<DiscoveryResult> results) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = results.map((r) => _discoveryResultToJson(r)).toList();
+      await prefs.setString('cached_scan_results', jsonEncode(jsonList));
+      await prefs.setInt('last_scan_timestamp', DateTime.now().millisecondsSinceEpoch);
+      
+      setState(() {
+        _discoveredDevices = results;
+        _lastScanTime = DateTime.now();
+      });
+      
+      AppLogger.info('Saved ${results.length} scan results to cache');
+    } catch (e) {
+      AppLogger.error('Failed to save scan results', error: e);
+    }
+  }
+  
+  /// Convert DiscoveryResult to JSON
+  Map<String, dynamic> _discoveryResultToJson(DiscoveryResult result) {
+    return {
+      'host': result.host,
+      'bestPort': result.bestPort,
+      'bestResponseTime': result.bestResponseTime?.inMilliseconds,
+      'macAddress': result.macAddress,
+      'manufacturer': result.manufacturer,
+    };
+  }
+  
+  /// Convert JSON to DiscoveryResult
+  DiscoveryResult _discoveryResultFromJson(Map<String, dynamic> json) {
+    return DiscoveryResult(
+      host: json['host'] as String,
+      reachablePorts: [], // Not cached to save space
+      bestPort: json['bestPort'] as int,
+      bestResponseTime: json['bestResponseTime'] != null 
+        ? Duration(milliseconds: json['bestResponseTime'] as int)
+        : null,
+      macAddress: json['macAddress'] as String?,
+      manufacturer: json['manufacturer'] as String?,
+    );
+  }
+  
+  /// Handle scan button press - show cached results or start new scan
+  Future<void> _onScanButtonPressed() async {
+    if (_discoveredDevices.isNotEmpty) {
+      // Show cached results with rescan option
+      _showDiscoveryResults(_discoveredDevices, fromCache: true);
+    } else {
+      // No cache, start fresh scan
+      _startNetworkScan();
+    }
+  }
+  
   Future<void> _startNetworkScan() async {
     setState(() { _isScanning = true; _discoveredDevices = []; });
     _showScanningDialog();
@@ -621,7 +702,13 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
       if (mounted) {
         Navigator.of(context).pop();
         setState(() => _isScanning = false);
-        results.isNotEmpty ? _showDiscoveryResults(results) : _showNoDevicesFound();
+        
+        if (results.isNotEmpty) {
+          await _saveScanResults(results);  // Save to cache
+          _showDiscoveryResults(results, fromCache: false);
+        } else {
+          _showNoDevicesFound();
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -656,7 +743,7 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
     );
   }
 
-  void _showDiscoveryResults(List<DiscoveryResult> results) {
+  void _showDiscoveryResults(List<DiscoveryResult> results, {required bool fromCache}) {
     showModalBottomSheet(
       context: context,
       backgroundColor: _surface,
@@ -672,20 +759,60 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
             Container(margin: const EdgeInsets.only(top: 12), width: 40, height: 4, decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(2))),
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Row(
+              child: Column(
                 children: [
-                  Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _primaryLight, borderRadius: BorderRadius.circular(10)), child: Icon(Icons.devices, color: _primary)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Devices Found', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-                        Text('${results.length} Host detected', style: TextStyle(color: _textSecondary, fontSize: 13)),
-                      ],
-                    ),
+                  Row(
+                    children: [
+                      Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: _primaryLight, borderRadius: BorderRadius.circular(10)), child: Icon(Icons.devices, color: _primary)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Devices Found', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+                            Text('${results.length} Host detected', style: TextStyle(color: _textSecondary, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                      IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                    ],
                   ),
-                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                  if (fromCache && _lastScanTime != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.access_time, size: 16, color: Colors.grey.shade600),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Last scan: ${_formatScanTimestamp(_lastScanTime!)}',
+                              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () {
+                              Navigator.pop(context);  // Close dialog
+                              _startNetworkScan();     // Start new scan
+                            },
+                            icon: Icon(Icons.refresh, size: 16, color: _primary),
+                            label: Text('Rescan', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _primary)),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              minimumSize: const Size(0, 32),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -770,5 +897,34 @@ class _ConnectionConfigPageState extends State<ConnectionConfigPage> {
     final c = int.tryParse(v.trim());
     if (c == null || c < 1 || c > _maxModuleCount) return '1-$_maxModuleCount';
     return null;
+  }
+  
+  /// Format timestamp for scan display: "HH:MM | DD/MM/YYYY"
+  String _formatScanTimestamp(DateTime time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    final day = time.day.toString().padLeft(2, '0');
+    final month = time.month.toString().padLeft(2, '0');
+    final year = time.year;
+    
+    return '$hour:$minute | $day/$month/$year';
+  }
+  
+  /// Format timestamp for display
+  String _formatTimestamp(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    
+    if (diff.inMinutes < 1) {
+      return 'just now';
+    } else if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}m ago';
+    } else if (diff.inHours < 24) {
+      return '${diff.inHours}h ago';
+    } else {
+      final hour = time.hour.toString().padLeft(2, '0');
+      final minute = time.minute.toString().padLeft(2, '0');
+      return '${time.day}/${time.month} $hour:$minute';
+    }
   }
 }

@@ -21,6 +21,7 @@ import '../../../data/datasources/local/exit_password_service.dart';
 import '../../../data/datasources/local/zone_mapping_service.dart';
 import '../../../data/services/auto_refresh_service.dart';
 import '../../../data/services/bell_manager.dart';
+import '../../services/alarm_queue_manager.dart';
 import '../../providers/fire_alarm_data_provider.dart';
 import '../../../data/models/zone_status_model.dart';
 import '../../widgets/blinking_tab_header.dart';
@@ -28,6 +29,13 @@ import '../../widgets/zone_detail_dialog.dart';
 import '../../widgets/exit_password_dialog.dart';
 import '../auth/login_page.dart';
 import '../../../main.dart';
+
+/// Module status based on zone states within the module
+enum ModuleStatus {
+  normal,
+  trouble,
+  alarm,
+}
 
 class OfflineMonitoringPage extends StatefulWidget {
   final String ip;
@@ -96,6 +104,10 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
   bool _isNavigating = false;
   bool _isDialogClosing = false;
   bool _disposed = false;
+  
+  // Multi-alarm queue management
+  final AlarmQueueManager _alarmQueueManager = AlarmQueueManager();
+  bool _isAlarmDialogOpen = false;
 
   @override
   void initState() {
@@ -153,11 +165,20 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // Listen to new alarm stream for auto-opening zone detail dialog
     _newAlarmSubscription = fireAlarmData.newAlarmStream.listen((zoneNumber) {
       if (mounted && !_disposed) {
-        AppLogger.info('Auto-opening zone detail dialog for Zone $zoneNumber', tag: 'AUTO_ALARM_DIALOG');
-        _showZoneDetailDialog(context, zoneNumber, fireAlarmData);
+        // Add alarm to queue
+        _alarmQueueManager.addAlarm(zoneNumber);
+        
+        // Only show dialog if none is currently open
+        if (!_isAlarmDialogOpen) {
+          _isAlarmDialogOpen = true;
+          AppLogger.info('Opening multi-alarm dialog for Zone $zoneNumber', tag: 'AUTO_ALARM_DIALOG');
+          _showMultiAlarmDialog(context, fireAlarmData);
+        } else {
+          AppLogger.info('Dialog already open, Zone $zoneNumber added to queue', tag: 'AUTO_ALARM_DIALOG');
+        }
       }
     });
-    AppLogger.info('New alarm stream listener started', tag: 'AUTO_ALARM_DIALOG');
+    AppLogger.info('Multi-alarm stream listener started', tag: 'AUTO_ALARM_DIALOG');
 
     // ✅ FIXED: Delay WebSocket initialization until after first frame
     // This ensures GetIt services are fully registered before access
@@ -170,6 +191,13 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     // Start auto-save timer for activity logs
     fireAlarmData.startActivityLogAutoSave();
     AppLogger.info('Activity log auto-save timer started', tag: 'OFFLINE_MONITORING');
+
+    // 🔥 NEW: Log user entry to monitoring system
+    fireAlarmData.addActivityLog(
+      'User Return Monitoring System',
+      type: 'lifecycle',
+    );
+    AppLogger.info('User entered monitoring page', tag: 'LIFECYCLE');
   }
 
   Future<void> _loadZoneNames() async {
@@ -454,6 +482,18 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
 
   @override
   void dispose() {
+    // 🔥 NEW: Log user exit FIRST before any cleanup
+    try {
+      final fireAlarmData = Provider.of<FireAlarmData>(context, listen: false);
+      fireAlarmData.addActivityLog(
+        'User Left Monitoring System',
+        type: 'lifecycle',
+      );
+      AppLogger.info('User exited monitoring page', tag: 'LIFECYCLE');
+    } catch (e) {
+      AppLogger.warning('Could not log user exit: $e', tag: 'LIFECYCLE');
+    }
+
     // 🔥 CRITICAL FIX: Remove listener FIRST before any other dispose operations
     // This prevents notifyListeners() from being called during dispose
     try {
@@ -1814,7 +1854,7 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          (hasActiveAlarm || hasActiveBells) ? 'Active Alerts' : 'No Active Alarms',
+                          (hasActiveAlarm || hasActiveBells) ? 'Active Bell Area' : 'No Active Alarms',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -1829,6 +1869,9 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                               color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade600 : Colors.green.shade600,
                             ),
                           ),
+                          const SizedBox(height: 4),
+                          // 🔔 Display module addresses with active bells
+                          _buildActiveBellModules(bellManager),
                         ] else if (hasActiveAlarm) ...[
                           Text(
                             '${alarmZones.length} zone(s) in alarm state',
@@ -1838,23 +1881,9 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                             ),
                           ),
                         ] else if (hasActiveBells) ...[
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.notifications_active,
-                                size: 16,
-                                color: Colors.orange,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '${bellManager?.currentStatus.activeBells ?? 0} bell(s) ringing',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade600 : Colors.green.shade600,
-                                ),
-                              ),
-                            ],
-                          ),
+                          const SizedBox(height: 4),
+                          // Display module addresses with active bells
+                          _buildActiveBellModules(bellManager),
                         ] else ...[
                           Text(
                             'All zones are normal',
@@ -2304,6 +2333,44 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     );
   }
 
+  /// Show multi-alarm dialog with queue navigation
+  void _showMultiAlarmDialog(BuildContext context, FireAlarmData fireAlarmData) async {
+    // Reload zone names
+    final updatedZoneNames = await ZoneNameLocalStorage.loadZoneNamesForProject(widget.projectName);
+
+    // Update _zoneNames
+    if (mounted) {
+      setState(() {
+        _zoneNames = updatedZoneNames;
+      });
+    }
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (BuildContext context) {
+        return ZoneDetailDialog(
+          alarmQueue: _alarmQueueManager.currentQueue,
+          initialIndex: 0,  // Start at first alarm
+          fireAlarmData: fireAlarmData,
+          zoneNames: updatedZoneNames,
+          onClose: () {
+            // Clear queue and reset flag when dialog closes
+            _alarmQueueManager.clearQueue();
+            _isAlarmDialogOpen = false;
+          },
+        );
+      },
+    ).then((_) {
+      // Ensure flag is reset if dialog closed unexpectedly
+      _isAlarmDialogOpen = false;
+      _alarmQueueManager.clearQueue();
+    });
+  }
+
   /// Show module detail dialog
   void _showModuleDetailDialog(BuildContext context, int moduleNumber, FireAlarmData fireAlarmData) async {
     // 🔥 FIX: Reload zone names sebelum menampilkan dialog
@@ -2322,6 +2389,78 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
           zoneNames: updatedZoneNames,
         );
       },
+    );
+  }
+
+  /// Build widget showing module addresses with active bells
+  /// Format: "MODULE ADDRESS: #01, #02, #03"
+  Widget _buildActiveBellModules(BellManager? bellManager) {
+    if (bellManager == null) return const SizedBox.shrink();
+    
+    final bellStatus = bellManager.currentStatus;
+    if (bellStatus.activeBells == 0) return const SizedBox.shrink();
+    
+    // Extract device addresses with active bells
+    final activeModules = bellStatus.deviceBellStatus.entries
+      .where((entry) => entry.value.isActive)
+      .map((entry) => entry.value.deviceAddress)
+      .toList()
+      ..sort();  // Sort numerically
+    
+    if (activeModules.isEmpty) return const SizedBox.shrink();
+    
+    // Format: #01, #02, #03
+    final moduleAddresses = activeModules
+      .map((addr) => '#${addr.toString().padLeft(2, '0')}')
+      .join(', ');
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: Colors.red.shade200,
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.notifications_active,
+            size: 18,
+            color: Colors.red.shade700,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey.shade800,
+                ),
+                children: [
+                  TextSpan(
+                    text: 'MODULE ADDRESS: ',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red.shade800,
+                    ),
+                  ),
+                  TextSpan(
+                    text: moduleAddresses,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red.shade700,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2350,10 +2489,12 @@ class IndividualModuleContainer extends StatefulWidget {
 class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
   // Cache zone colors to detect changes and avoid unnecessary rebuilds
   late Map<int, Color> _lastZoneColors;
+  late ModuleStatus _lastModuleStatus;
 
   @override
   void initState() {
     super.initState();
+    _lastModuleStatus = _getModuleStatus();
     _initializeColorCache();
   }
 
@@ -2374,6 +2515,13 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
     // Check if any zone colors have changed
     bool colorsChanged = false;
 
+    // Check module status first
+    final currentModuleStatus = _getModuleStatus();
+    if (_lastModuleStatus != currentModuleStatus) {
+      _lastModuleStatus = currentModuleStatus;
+      colorsChanged = true;
+    }
+
     // Check zone colors
     for (int ledIndex = 1; ledIndex <= 5; ledIndex++) {
       final zoneNumber = ZoneStatusUtils.calculateGlobalZoneNumber(widget.moduleNumber, ledIndex);
@@ -2390,23 +2538,74 @@ class _IndividualModuleContainerState extends State<IndividualModuleContainer> {
     }
   }
 
+  /// Determine module status based on all 5 zones
+  /// Priority: Alarm > Trouble > Normal
+  ModuleStatus _getModuleStatus() {
+    bool hasAlarm = false;
+    bool hasTrouble = false;
+    
+    // Check all 5 zones in this module
+    for (int ledIndex = 1; ledIndex <= 5; ledIndex++) {
+      final zoneNumber = ZoneStatusUtils.calculateGlobalZoneNumber(
+        widget.moduleNumber, 
+        ledIndex
+      );
+      final zoneStatus = widget.fireAlarmData.getZoneStatus(zoneNumber);
+      
+      if (zoneStatus?.hasAlarm == true) {
+        hasAlarm = true;
+        break; // Alarm has highest priority, stop checking
+      }
+      if (zoneStatus?.hasTrouble == true) {
+        hasTrouble = true;
+      }
+    }
+    
+    if (hasAlarm) return ModuleStatus.alarm;
+    if (hasTrouble) return ModuleStatus.trouble;
+    return ModuleStatus.normal;
+  }
+
+  /// Get container decoration based on module status
+  BoxDecoration _getModuleDecoration(ModuleStatus status) {
+    Color bgColor;
+    Color borderColor;
+    
+    switch (status) {
+      case ModuleStatus.alarm:
+        bgColor = Colors.red.shade50;
+        borderColor = Colors.red.shade400;
+        break;
+      case ModuleStatus.trouble:
+        bgColor = Colors.yellow.shade50;
+        borderColor = Colors.yellow.shade600;
+        break;
+      case ModuleStatus.normal:
+        bgColor = Colors.grey.shade50;
+        borderColor = Colors.grey.shade300;
+        break;
+    }
+    
+    return BoxDecoration(
+      color: bgColor,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: borderColor, width: 2),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.1),
+          blurRadius: 2,
+          spreadRadius: 1,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: widget.onModuleTap != null ? () => widget.onModuleTap!(widget.moduleNumber) : null,
       child: Container(
-        decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade300),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 2,
-              spreadRadius: 1,
-            ),
-          ],
-        ),
+        decoration: _getModuleDecoration(_getModuleStatus()),
         child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.center,

@@ -591,11 +591,15 @@ class FireAlarmData extends ChangeNotifier {
       return;
     }
 
-    // Debounce: Prevent rapid status changes within 500ms
+    // Debounce: Prevent rapid status changes within 2 seconds
     final now = DateTime.now();
     if (_lastConnectionStatusChange != null) {
       final timeSinceLastChange = now.difference(_lastConnectionStatusChange!);
-      if (timeSinceLastChange < _connectionStatusDebounce) {
+      // 🔥 CRITICAL: Extended debounce (2 seconds) to handle page lifecycle transitions
+      // This prevents spam during dispose→init cycles when user navigates in/out of monitoring page
+      final debounceThreshold = Duration(seconds: 2);
+      
+      if (timeSinceLastChange < debounceThreshold) {
         AppLogger.debug('Connection status change debounced (${timeSinceLastChange.inMilliseconds}ms since last)', tag: 'CONNECTION');
         // Still update the internal state but don't log or notify
         _isWebSocketConnected = isConnected;
