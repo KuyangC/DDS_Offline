@@ -51,6 +51,11 @@ class FireAlarmData extends ChangeNotifier {
   bool _troubleLED = false;
   bool _supervisoryLED = false;
   bool _normalLED = false;
+  
+  // 🔥 TROUBLE LED Debouncing (flip-flop fix)
+  bool _stableTroubleLED = false;  // Actual displayed TROUBLE state
+  int _troubleOffCounter = 0;       // Count consecutive TROUBLE OFF signals
+  static const int _troubleOffThreshold = 4; // Need 4x OFF before clearing
 
   // WebSocket connection state
   bool _hasWebSocketData = false;
@@ -80,6 +85,16 @@ class FireAlarmData extends ChangeNotifier {
   final Set<int> _accumulatedAlarmZones = {};
   final Set<int> _accumulatedTroubleZones = {};
 
+  // 🔥 NEW: Alarm LED tracking for accumulation feature
+  bool _previousAlarmLED = false;
+  final Set<int> _alarmAccumulationList = {};
+  
+  // 🔥 NEW: Locked alarm zones - remain "Alarm" until master LED OFF
+  final Set<int> _lockedAlarmZones = {};
+  
+  // 🔥 NEW: Master SILENCED status
+  bool _isSilenced = false;
+
   // New alarm stream for auto-opening zone detail dialog
   final StreamController<int> _newAlarmController = StreamController<int>.broadcast();
   Stream<int> get newAlarmStream => _newAlarmController.stream;
@@ -103,6 +118,14 @@ class FireAlarmData extends ChangeNotifier {
   bool get hasWebSocketData => _hasWebSocketData;
   bool get isWebSocketMode => _isWebSocketMode;
   bool get isWebSocketConnected => _isWebSocketConnected;
+
+  // 🔥 NEW: Getters - Alarm accumulation
+  Set<int> get accumulatedAlarmZones => Set.unmodifiable(_alarmAccumulationList);
+  int get accumulatedAlarmCount => _alarmAccumulationList.length;
+  bool get isAccumulationActive => _alarmLED && _alarmAccumulationList.isNotEmpty;
+  
+  // 🔥 NEW: Getter - Master SILENCED status
+  bool get isSilenced => _isSilenced;
 
   /// Send notification (offline mode - no-op)
   void sendNotification({
@@ -560,10 +583,14 @@ class FireAlarmData extends ChangeNotifier {
     _zoneStatus.clear();
     _accumulatedAlarmZones.clear();
     _accumulatedTroubleZones.clear();
+    _alarmAccumulationList.clear(); // 🔥 NEW: Clear accumulation
+    _previousAlarmLED = false; // 🔥 NEW: Reset LED tracking
     _loggedAlarmZones.clear();
     _loggedTroubleZones.clear();
     _alarmLED = false;
     _troubleLED = false;
+    _stableTroubleLED = false;
+    _troubleOffCounter = 0;
     _supervisoryLED = false;
     _normalLED = false;
     _hasWebSocketData = false;
@@ -827,10 +854,25 @@ class FireAlarmData extends ChangeNotifier {
       // Create new zone status object from parsed data
       final newZoneStatus = _createZoneStatus(unifiedZone);
       
+      // 🔥 FREEZE: Check if this is a locked zone returning to Normal
+      final oldZoneStatus = _zoneStatus[zoneNumber];
+      final isLockedZone = _lockedAlarmZones.contains(zoneNumber);
+      final wasAlarm = (oldZoneStatus?.hasAlarm == true);
+      final nowNormal = (unifiedZone.status == 'Normal');
+      final returningToNormal = wasAlarm && nowNormal;
+      
+      // ❌ FREEZE: Don't update if zone is locked and returning to Normal
+      if (isLockedZone && returningToNormal) {
+        AppLogger.debug(
+          '🔐 FREEZE: Zone $zoneNumber blocked from Normal update (locked, LED ON)',
+          tag: 'ALARM_FREEZE'
+        );
+        // Skip status update AND zone tracking
+        continue; // Skip to next zone
+      }
+      
       // OPTIMIZATION: Only update map if status actually changed
       // This preserves object references for UI Selectors to skip rebuilds
-      final oldZoneStatus = _zoneStatus[zoneNumber];
-      
       if (oldZoneStatus != newZoneStatus) {
         _zoneStatus[zoneNumber] = newZoneStatus;
         updatesCount++;
@@ -870,8 +912,20 @@ class FireAlarmData extends ChangeNotifier {
   void _updateZoneTracking(dynamic unifiedZone) {
     final zoneNumber = unifiedZone.zoneNumber;
 
-    // Track accumulated zones and log new alarms/troubles
+    // ========== ALARM FREEZE LOGIC (Master LED-based) ==========
+    
+    // Case 1: NEW ALARM DETECTED
     if (unifiedZone.status == 'Alarm') {
+      // 🔥 FREEZE: Lock zone if master LED is ON
+      if (_alarmLED) {
+        _lockedAlarmZones.add(zoneNumber);
+        _alarmAccumulationList.add(zoneNumber);
+        AppLogger.debug(
+          '🔒 Zone $zoneNumber LOCKED (LED ON, Total: ${_lockedAlarmZones.length})',
+          tag: 'ALARM_FREEZE'
+        );
+      }
+      
       // Only log if this is a new alarm (not previously logged)
       if (!_loggedAlarmZones.contains(zoneNumber)) {
         _loggedAlarmZones.add(zoneNumber);
@@ -882,14 +936,16 @@ class FireAlarmData extends ChangeNotifier {
             ? unifiedZone.description
             : 'Zone $zoneNumber';
 
+        // 🔥 NEW: Add [ACCUMULATED] tag to log if LED active
+        final logPrefix = _alarmLED ? '[ACCUMULATED] ' : '';
         addActivityLog(
-          '$zoneName - Fire Alarm detected',
+          '$logPrefix$zoneName - Fire Alarm detected',
           zoneName: zoneName,
           type: 'alarm',
           notify: false, // Suppress notification during loop
         );
 
-        // Trigger new alarm stream for auto-opening zone detail dialog
+        // Trigger new alarm stream for auto-opening zone detail dialog (keep realtime behavior)
         if (!_newAlarmController.isClosed) {
           _newAlarmController.add(zoneNumber);
           AppLogger.info('New alarm detected for Zone $zoneNumber - triggering auto-open dialog', tag: 'AUTO_ALARM_DIALOG');
@@ -914,6 +970,15 @@ class FireAlarmData extends ChangeNotifier {
       }
       _accumulatedTroubleZones.add(zoneNumber);
     } else if (unifiedZone.status == 'Normal') {
+      // 🔥 FREEZE: Check if zone is locked (master LED still ON)
+      if (_lockedAlarmZones.contains(zoneNumber)) {
+        AppLogger.debug(
+          '🔐 Zone $zoneNumber returned to Normal but FROZEN (master LED ON)',
+          tag: 'ALARM_FREEZE'
+        );
+        return;  // ❌ EXIT early - keep showing "Alarm" in UI
+      }
+      
       // Clear from logged sets when returning to normal
       final wasAlarm = _loggedAlarmZones.contains(zoneNumber);
       final wasTrouble = _loggedTroubleZones.contains(zoneNumber);
@@ -936,15 +1001,103 @@ class FireAlarmData extends ChangeNotifier {
       // Remove from accumulated sets
       _accumulatedAlarmZones.remove(zoneNumber);
       _accumulatedTroubleZones.remove(zoneNumber);
+      _alarmAccumulationList.remove(zoneNumber); // 🔥 NEW: Remove from accumulation
     }
   }
 
   /// Update system LED status from parse result
   void _updateSystemLEDStatus(dynamic parseResult) {
     final systemStatus = parseResult.systemStatus;
-    _alarmLED = systemStatus.hasAlarm;
-    _troubleLED = systemStatus.hasTrouble;
+    final newAlarmLED = systemStatus.hasAlarm;
+    
+    // 🔥 FREEZE: Detect alarm LED state change (ON → OFF)
+    if (_previousAlarmLED && !newAlarmLED) {
+      // LED turned OFF → Unfreeze all locked zones
+      if (_lockedAlarmZones.isNotEmpty) {
+        final freedCount = _lockedAlarmZones.length;
+        AppLogger.info(
+          '🔓 Master LED OFF: Unfreezing $freedCount locked zones',
+          tag: 'ALARM_FREEZE'
+        );
+        
+        // Clear all locked zones
+        _lockedAlarmZones.clear();
+        
+        // Reset accumulation
+        _resetAccumulation();
+        
+        // Force UI refresh to show actual zone states
+        notifyListeners();
+        
+        addActivityLog(
+          'Alarm freeze released: $freedCount zones updated to actual state',
+          type: 'system',
+        );
+      } else {
+        // No locked zones, just reset accumulation
+        _resetAccumulation();
+      }
+    }
+    
+    // Update LED states
+    _previousAlarmLED = newAlarmLED;
+    _alarmLED = newAlarmLED;
+    
+    // 🔥 TROUBLE LED DEBOUNCING: Handle flip-flop behavior
+    final currentTroubleInput = systemStatus.hasTrouble;
+    
+    if (currentTroubleInput) {
+      // TROUBLE detected → immediately set TROUBLE
+      _stableTroubleLED = true;
+      _troubleOffCounter = 0;  // Reset OFF counter
+      print('🔥 TROUBLE ON detected - immediately set TROUBLE');
+    } else {
+      // TROUBLE not detected → increment OFF counter
+      if (_stableTroubleLED) {
+        _troubleOffCounter++;
+        print('🔥 TROUBLE OFF signal #$_troubleOffCounter/$_troubleOffThreshold');
+        
+        if (_troubleOffCounter >= _troubleOffThreshold) {
+          // Got 4x consecutive OFF → clear TROUBLE
+          _stableTroubleLED = false;
+          _troubleOffCounter = 0;
+          print('🔥 TROUBLE cleared after $_troubleOffThreshold consecutive OFF signals');
+        }
+      }
+    }
+    
+    // Use stable TROUBLE state for display
+    _troubleLED = _stableTroubleLED;
+    _isSilenced = systemStatus.isSilenced; // 🔥 Update silenced status
     _supervisoryLED = false; // Not available in UnifiedSystemStatus
     _normalLED = !systemStatus.hasAlarm && !systemStatus.hasTrouble;
+  }
+  
+  /// 🔥 NEW: Reset alarm accumulation when LED turns OFF
+  void _resetAccumulation() {
+    if (_alarmAccumulationList.isNotEmpty) {
+      final count = _alarmAccumulationList.length;
+      _alarmAccumulationList.clear();
+      
+      addActivityLog(
+        'Alarm accumulation reset ($count zones recorded)',
+        type: 'system',
+      );
+      
+      AppLogger.info(
+        '🔄 Alarm accumulation reset: $count zones cleared',
+        tag: 'ALARM_ACCUMULATION'
+      );
+      
+      notifyListeners();
+    }
+  }
+  
+  /// 🔥 NEW: Get accumulated alarm zone statuses
+  List<ZoneStatus> getAccumulatedAlarmZones() {
+    return _alarmAccumulationList
+        .map((zoneNum) => _zoneStatus[zoneNum])
+        .whereType<ZoneStatus>()
+        .toList();
   }
 }

@@ -136,10 +136,38 @@ class EnhancedZoneParsingStrategy implements ParsingStrategy {
   @override
   Future<UnifiedParsingResult> parseData(String rawData, Map<String, dynamic>? context) async {
     try {
+      // 🔥 CRITICAL: Extract master data BEFORE first STX
+      String? masterData;
+      bool hasMasterAlarm = false;
+      bool hasMasterSilenced = false;
+      bool hasMasterTrouble = false;
+      
       List<String> deviceModules = [];
       if (rawData.contains('<STX>')) {
         final firstSTXIndex = rawData.indexOf('<STX>');
         if (firstSTXIndex != -1) {
+            // 🔥 NEW: Extract data BEFORE STX = master data (e.g., "54CD")
+            if (firstSTXIndex > 0) {
+              masterData = rawData.substring(0, firstSTXIndex).trim();
+              
+              // Parse master status byte (4 chars: header + status byte)
+              if (masterData.length >= 4) {
+                final statusByte = masterData.substring(2); // Last 2 chars = "CD"
+                final statusValue = int.parse(statusByte, radix: 16); // CD = 205
+                
+                // Bit 4 (0x10 = 16) = ALARM LED (inverted: 0=ON, 1=OFF)
+                hasMasterAlarm = (statusValue & 0x10) == 0;
+                
+                // 🔥 Bit 3 (0x08 = 8) = TROUBLE LED (inverted: 0=ON, 1=OFF)
+                hasMasterTrouble = (statusValue & 0x08) == 0;
+                
+                // 🔥 Bit 1 (0x02 = 2) = SILENCED (inverted: 0=ON, 1=OFF)
+                hasMasterSilenced = (statusValue & 0x02) == 0;
+                
+                print('🔥 MASTER DATA: $masterData, StatusByte: $statusByte (0x${statusValue.toRadixString(16)}), ALARM: $hasMasterAlarm, TROUBLE: $hasMasterTrouble, SILENCED: $hasMasterSilenced');
+              }
+            }
+            
             String dataSection = rawData.substring(firstSTXIndex);
             deviceModules = dataSection.split('<STX>').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
         }
@@ -172,11 +200,12 @@ class EnhancedZoneParsingStrategy implements ParsingStrategy {
         }
       }
 
+      // 🔥 USE MASTER DATA if available, otherwise fall back to zone count
       final systemStatus = UnifiedSystemStatus(
-        hasAlarm: alarmZones > 0,
-        hasTrouble: troubleZones > 0,
+        hasAlarm: masterData != null ? hasMasterAlarm : (alarmZones > 0),
+        hasTrouble: masterData != null ? hasMasterTrouble : (troubleZones > 0),
         hasPower: connectedDevices > 0,
-        isSilenced: false,
+        isSilenced: masterData != null ? hasMasterSilenced : false,
         isDrill: false,
         isDisabled: false,
         isSystemOffline: connectedDevices == 0,
@@ -188,6 +217,7 @@ class EnhancedZoneParsingStrategy implements ParsingStrategy {
         systemContext: _determineSystemContext(alarmZones, troubleZones, connectedDevices),
         timestamp: DateTime.now(),
         activeEvents: [
+          if (masterData != null && hasMasterAlarm) 'MASTER LED ALARM ON',
           if (alarmZones > 0) '$alarmZones ALARM ZONES',
           if (troubleZones > 0) '$troubleZones TROUBLE ZONES',
           if (connectedDevices < totalDevices) '${totalDevices - connectedDevices} DEVICES OFFLINE',

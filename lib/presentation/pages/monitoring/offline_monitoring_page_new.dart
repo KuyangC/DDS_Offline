@@ -1254,25 +1254,25 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
     );
   }
 
-  /// Helper: Get system status text based on zone states
+  /// Helper: Get system status text based on LED states (from master data)
   String _getSystemStatusText(FireAlarmData fireAlarmData) {
-    // Cek berdasarkan active zones
-    if (fireAlarmData.activeAlarmZones.isNotEmpty) {
+    // 🔥 USE LED FLAGS from master data, NOT zone counts!
+    if (fireAlarmData.alarmLED) {
       return 'ALARM';
     }
-    if (fireAlarmData.activeTroubleZones.isNotEmpty) {
+    if (fireAlarmData.troubleLED) {
       return 'TROUBLE';
     }
     return 'NORMAL';
   }
 
-  /// Helper: Get system status color based on zone states
+  /// Helper: Get system status color based on LED states (from master data)
   Color _getSystemStatusColor(FireAlarmData fireAlarmData) {
-    // Cek berdasarkan active zones
-    if (fireAlarmData.activeAlarmZones.isNotEmpty) {
+    // 🔥 USE LED FLAGS from master data, NOT zone counts!
+    if (fireAlarmData.alarmLED) {
       return Colors.red;  // ALARM = Merah
     }
-    if (fireAlarmData.activeTroubleZones.isNotEmpty) {
+    if (fireAlarmData.troubleLED) {
       return Colors.yellow.shade700;  // TROUBLE = KUNING
     }
     return Colors.green;  // NORMAL = Hijau
@@ -1823,6 +1823,9 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
         final alarmZones = _extractAlarmZones();
         final hasActiveAlarm = alarmZones.isNotEmpty;
 
+        // 🔥 Get silenced status from fireAlarmData
+        final isSilenced = fireAlarmData.isSilenced;
+
         // 🔔 FIXED: Use BellManager for accurate bell status (not FireAlarmData)
         // BellManager uses 0x20 bit correctly, doesn't depend on LED status
         final bellManager = GetIt.instance<BellManager>();
@@ -1835,17 +1838,19 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade50 : Colors.green.shade50,
+                // 🔥 Show warning colors if silenced OR has active alarm/bells
+                color: (hasActiveAlarm || hasActiveBells || isSilenced) ? Colors.red.shade50 : Colors.green.shade50,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade200 : Colors.green.shade200,
+                  color: (hasActiveAlarm || hasActiveBells || isSilenced) ? Colors.red.shade200 : Colors.green.shade200,
                 ),
               ),
               child: Row(
                 children: [
                   Icon(
-                    (hasActiveAlarm || hasActiveBells) ? Icons.warning : Icons.check_circle,
-                    color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade600 : Colors.green.shade600,
+                    // 🔥 Show warning icon if silenced OR has active alarm/bells
+                    (hasActiveAlarm || hasActiveBells || isSilenced) ? Icons.warning : Icons.check_circle,
+                    color: (hasActiveAlarm || hasActiveBells || isSilenced) ? Colors.red.shade600 : Colors.green.shade600,
                     size: 24,
                   ),
                   const SizedBox(width: 12),
@@ -1854,11 +1859,17 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          (hasActiveAlarm || hasActiveBells) ? 'Active Bell Area' : 'No Active Alarms',
+                          // 🔥 Show "Bells Area SILENCED" if master silenced ON
+                          isSilenced
+                              ? 'Bells Area SILENCED'
+                              : (hasActiveAlarm || hasActiveBells)
+                                  ? 'Active Bell Area'
+                                  : 'No Active Alarms',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade700 : Colors.green.shade700,
+                            // 🔥 Red color if silenced OR active alarms
+                            color: (hasActiveAlarm || hasActiveBells || isSilenced) ? Colors.red.shade700 : Colors.green.shade700,
                           ),
                         ),
                         if (hasActiveAlarm && hasActiveBells) ...[
@@ -1884,14 +1895,6 @@ class _OfflineMonitoringPageState extends State<OfflineMonitoringPage> with Widg
                           const SizedBox(height: 4),
                           // Display module addresses with active bells
                           _buildActiveBellModules(bellManager),
-                        ] else ...[
-                          Text(
-                            'All zones are normal',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: (hasActiveAlarm || hasActiveBells) ? Colors.red.shade600 : Colors.green.shade600,
-                            ),
-                          ),
                         ],
                       ],
                     ),
